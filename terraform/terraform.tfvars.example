@@ -1,0 +1,5 @@
+ssh_allowed_cidr      = "203.0.113.5/32"
+rds_master_password   = "YourStrongPassword123!"
+public_key_path       = "/Users/you/.ssh/id_rsa.pub"
+aws_access_key_id     = "AKIAXXXXXXXXXX"
+aws_secret_access_key = "xxxxxxxxxxxxxxxxxxxxxxxxx"

@@ -1,0 +1,31 @@
+# Elasticsearch — Helm values
+# Install: helm repo add elastic https://helm.elastic.co
+# Install: helm upgrade --install elasticsearch elastic/elasticsearch -n logging --create-namespace -f elasticsearch-values.yaml
+
+replicas: 1
+minimumMasterNodes: 1
+
+imageTag: "8.11.0"
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "512Mi"
+  limits:
+    cpu: "300m"
+    memory: "1Gi"
+
+volumeClaimTemplate:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+
+esJavaOpts: "-Xmx512m -Xms512m"
+
+config:
+  discovery.type: single-node
+  xpack.security.enabled: "false"
+
+networkPolicy:
+  enabled: false

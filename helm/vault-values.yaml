@@ -1,0 +1,26 @@
+# Vault — simple KV store for secrets
+# Install: helm repo add hashicorp https://helm.releases.hashicorp.com
+# Install: helm upgrade --install vault hashicorp/vault -n vault --create-namespace -f vault-values.yaml
+
+server:
+  dev:
+    enabled: true
+    devRootToken: "root"
+
+  service:
+    type: NodePort
+    nodePort: 30820
+
+  extraEnvironmentVars:
+    VAULT_LOCAL_CONFIG: |
+      ui = true
+      listener "tcp" {
+        address = "0.0.0.0:8200"
+        tls_disable = true
+      }
+      storage "file" {
+        path = "/vault/data"
+      }
+
+ui:
+  enabled: true

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express'
 import db from '../db/connection.js'
+import { updateSensorGauges } from '../middleware/metrics.js'
 
 const router = Router()
 
@@ -20,6 +21,9 @@ function mapReading(r: any) {
 router.get('/', async (_req: Request, res: Response) => {
   try {
     const rows = await db('sensor_readings').orderBy('timestamp', 'desc').limit(100)
+    if (rows.length > 0) {
+      updateSensorGauges(Number(rows[0].co2_ppm), Number(rows[0].temperature_c))
+    }
     res.json(rows.map(mapReading))
   } catch (err) {
     console.error('Sensor readings error:', err)

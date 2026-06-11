@@ -1,11 +1,9 @@
-version: "3.9"
-
 services:
   backend:
     build: ./backend
     container_name: terrafusion-api
     ports:
-      - "3001:3001"
+      - "8081:3001"
     environment:
       - PORT=3001
       - DB_TYPE=sqlite
@@ -24,7 +22,7 @@ services:
     build: ./frontend
     container_name: terrafusion-web
     ports:
-      - "80:80"
+      - "3000:80"
     depends_on:
       backend:
         condition: service_healthy

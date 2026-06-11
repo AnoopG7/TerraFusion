@@ -1,0 +1,21 @@
+# Kibana — Helm values
+# Install: helm upgrade --install kibana elastic/kibana -n logging -f kibana-values.yaml
+
+imageTag: "8.11.0"
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "256Mi"
+  limits:
+    cpu: "300m"
+    memory: "512Mi"
+
+service:
+  type: NodePort
+  nodePort: 30560
+
+elasticsearchHosts: "http://elasticsearch-master.logging.svc:9200"
+
+config:
+  server.publicBaseUrl: ""

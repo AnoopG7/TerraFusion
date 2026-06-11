@@ -9,12 +9,14 @@ import taskRoutes from './routes/tasks.js'
 import alertRoutes from './routes/alerts.js'
 import metricRoutes from './routes/metrics.js'
 import regionRoutes from './routes/regions.js'
+import { metricsHandler, trackRequest } from './middleware/metrics.js'
 
 dotenv.config()
 
 const app = express()
 const PORT = Number(process.env.PORT) || 3001
 
+app.use(trackRequest)
 app.use(cors({
   origin: ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5174', 'http://127.0.0.1:5174'],
   credentials: true,
@@ -28,6 +30,8 @@ app.use('/api/tasks', taskRoutes)
 app.use('/api/alerts', alertRoutes)
 app.use('/api/metrics', metricRoutes)
 app.use('/api/regions', regionRoutes)
+
+app.get('/metrics', metricsHandler)
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'TerraFusion Climate Platform' })
