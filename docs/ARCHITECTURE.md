@@ -88,10 +88,12 @@
 │  │  │  │  └─────────────────────────────────────────────────────────┘   │ │   │
 │  │  │  │                                                                  │ │   │
 │  │  │  │  ┌─────────────────────────────────────────────────────────┐   │ │   │
-│  │  │  │  │  CI/CD LAYER (Jenkins — Docker container)                │   │ │   │
-│  │  │  │  │  jenkins-blueocean :8080  (host port :8080)             │   │ │   │
-│  │  │  │  │  Workspace: /var/jenkins_home                            │   │ │   │
-│  │  │  │  │  Tools: docker, kubectl (via host), aws cli            │   │ │   │
+│  │  │  │  │  CI/CD LAYER (Jenkins — native systemd)                  │   │ │   │
+│  │  │  │  │  jenkins :8080 (systemd service)                         │   │ │   │
+│  │  │  │  │  Home: /var/lib/jenkins  |  Workspace: /var/lib/jenkins/│   │ │   │
+│  │  │  │  │  │                           workspaces/terrafusion-pipe│   │ │   │
+│  │  │  │  │  │  line                                                │   │ │   │
+│  │  │  │  │  Tools: docker, kubectl (host), aws cli, node 22       │   │ │   │
 │  │  │  │  └─────────────────────────────────────────────────────────┘   │ │   │
 │  │  │  │                                                                  │ │   │
 │  │  │  │  ┌─────────────────────────────────────────────────────────┐   │ │   │
@@ -145,9 +147,8 @@
 | VPC | `aws_vpc` | 10.0.0.0/16, DNS hostname + support enabled | Network boundary |
 | Public Subnet | `aws_subnet` | 10.0.1.0/24 in ap-south-1a, auto-assign public IP | Hosts EC2 |
 | Private Subnet A | `aws_subnet` | 10.0.10.0/24 in ap-south-1a | RDS primary |
-| Private Subnet B | `aws_subnet` | 10.0.11.0/24 in ap-south-1b | RDS secondary |
+| Private Subnet B | `aws_subnet` | 10.0.11.0/24 in ap-south-1b | RDS standby (single-AZ, reserved) |
 | Internet Gateway | `aws_internet_gateway` | Attached to VPC | Public internet access |
-| S3 VPC Endpoint | `aws_vpc_endpoint` | Gateway type, route table attached | Free private S3 access |
 | EC2 | `aws_instance` | m7i-flex.large, Ubuntu 24.04, 20GB gp3, IMDSv2 | All compute |
 | Security Group EC2 | `aws_security_group` | SSH(22), HTTP(80,443), Jenkins(8080), K8s API(6443), NodePort(30000-32767) | Access control |
 | Security Group RDS | `aws_security_group` | MySQL(3306) from EC2 SG only | DB isolation |
@@ -389,7 +390,7 @@ Manual flow:
 | OS | Ubuntu 24.04 LTS | Noble | Long-term support, Docker/k3s native support |
 | Containers | Docker | 27.x | PS mandated, image build/runtime |
 | Orchestration | k3s | 1.30.x | Lightweight K8s (PS mandated), single binary, <50MB RAM |
-| CI/CD | Jenkins | Latest (Docker) | PS mandated, Pipeline as Code |
+| CI/CD | Jenkins | Latest (systemd) | PS mandated, Pipeline as Code |
 | IaC | Terraform | ≥ 1.5 | PS mandated, AWS provider |
 | Database | MySQL (RDS) | 8.0.40 | PS mentioned "environmental data", relational |
 | Monitoring | Prometheus + Grafana | Latest | PS mandated |

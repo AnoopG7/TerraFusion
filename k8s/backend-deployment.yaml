@@ -17,8 +17,8 @@ spec:
     spec:
       containers:
       - name: backend
-        image: XXXXXXXX.dkr.ecr.ap-south-1.amazonaws.com/terrafusion-backend:latest
-        imagePullPolicy: Always
+        image: terrafusion-backend:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3001
         envFrom:

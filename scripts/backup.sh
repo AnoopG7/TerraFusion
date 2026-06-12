@@ -32,10 +32,30 @@ case "$DB_TYPE" in
     sqlite3 "$DB_FILE" .dump > "$BACKUP_FILE"
     ;;
   mysql)
-    MYSQL_PWD="$DB_PASSWORD" mysqldump \
-      -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" \
-      --single-transaction --routines --triggers \
-      "$DB_NAME" > "$BACKUP_FILE"
+    if [[ -z "$DB_PASSWORD" ]]; then
+      echo "[!] DB_PASSWORD not set. Cannot connect to MySQL."
+      exit 1
+    fi
+    echo "[*] Dumping MySQL from ${DB_HOST}:${DB_PORT}/${DB_NAME}..."
+    if command -v mysqldump &>/dev/null; then
+      MYSQL_PWD="$DB_PASSWORD" mysqldump \
+        -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" \
+        --single-transaction --routines --triggers \
+        "$DB_NAME" > "$BACKUP_FILE"
+    elif command -v docker &>/dev/null; then
+      docker run --rm \
+        -e MYSQL_PWD="$DB_PASSWORD" \
+        mysql:8.0 \
+        mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" \
+          --single-transaction --routines --triggers \
+          "$DB_NAME" > "$BACKUP_FILE" 2>/dev/null || {
+        echo "[!] mysqldump via Docker failed."
+        exit 1
+      }
+    else
+      echo "[!] mysqldump not found. Install: sudo apt install mysql-client"
+      exit 1
+    fi
     ;;
 esac
 

@@ -37,21 +37,11 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'TerraFusion Climate Platform' })
 })
 
-async function start() {
-  try {
-    await db.migrate.latest()
-    console.log('Migrations complete')
+app.listen(PORT, () => {
+  console.log(`TerraFusion API running on http://localhost:${PORT}`)
+})
 
-    await db.seed.run()
-    console.log('Seeds complete')
-
-    app.listen(PORT, () => {
-      console.log(`TerraFusion API running on http://localhost:${PORT}`)
-    })
-  } catch (err) {
-    console.error('Failed to start server:', err)
-    process.exit(1)
-  }
-}
-
-start()
+db.migrate.latest()
+  .then(() => db.seed.run())
+  .then(() => console.log('Database migrations and seeds complete'))
+  .catch(err => console.error('Database unavailable (check .env DB_HOST):', err.message))

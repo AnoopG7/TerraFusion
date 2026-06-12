@@ -4,8 +4,8 @@
 
 prometheus:
   prometheusSpec:
-    retention: 7d
-    retentionSize: "10GB"
+    retention: 2d
+    retentionSize: "2GB"
     scrapeInterval: 30s
     evaluationInterval: 30s
     resources:

@@ -84,23 +84,15 @@ resource "aws_instance" "main" {
   instance_type          = var.ec2_instance_type
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.ec2.id]
-  key_name               = aws_key_pair.deploy.key_name
+  key_name               = var.key_pair_name
 
-  user_data = templatefile("${path.module}/../scripts/server-init.sh", {
-    GIT_REPO_URL  = var.git_repo_url
-    DEPLOY_BRANCH = var.deploy_branch
-    RDS_HOST      = aws_db_instance.mysql.endpoint
-    RDS_PORT      = aws_db_instance.mysql.port
-    RDS_DB_NAME   = aws_db_instance.mysql.db_name
-    RDS_USER      = aws_db_instance.mysql.username
-    RDS_PASSWORD  = aws_db_instance.mysql.password
-    AWS_REGION         = var.aws_region
-    AWS_ACCESS_KEY_ID      = var.aws_access_key_id
-    AWS_SECRET_ACCESS_KEY  = var.aws_secret_access_key
-    ECR_FRONTEND  = aws_ecr_repository.frontend.repository_url
-    ECR_BACKEND   = aws_ecr_repository.backend.repository_url
-    S3_BACKUP     = aws_s3_bucket.backup.bucket
-  })
+  user_data = replace(
+    replace(
+      file("${path.module}/../scripts/server-init.sh"),
+      "__REPLACE_ME__",    aws_db_instance.mysql.address
+    ),
+    "__RDS_PASSWORD__",    aws_db_instance.mysql.password
+  )
 
   root_block_device {
     volume_size = 20
@@ -114,11 +106,6 @@ resource "aws_instance" "main" {
   }
 
   tags = { Name = "${var.project_name}-server" }
-}
-
-resource "aws_key_pair" "deploy" {
-  key_name   = "${var.project_name}-deploy-key"
-  public_key = file(var.public_key_path)
 }
 
 resource "aws_eip" "main" {

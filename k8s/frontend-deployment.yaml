@@ -17,8 +17,8 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: XXXXXXXX.dkr.ecr.ap-south-1.amazonaws.com/terrafusion-frontend:latest
-        imagePullPolicy: Always
+        image: terrafusion-frontend:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 80
         env:

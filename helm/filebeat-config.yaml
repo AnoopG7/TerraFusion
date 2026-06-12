@@ -28,6 +28,7 @@ filebeatConfig:
                 - type: container
                   paths:
                     - "/var/log/containers/*${data.kubernetes.container.id}.log"
+                    - "/var/log/pods/*/*/*.log"
 
     processors:
       - add_kubernetes_metadata:

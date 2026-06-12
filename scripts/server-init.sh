@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GIT_REPO="${GIT_REPO_URL:-https://github.com/YOUR_ORG/terrafusion-platform.git}"
+GIT_REPO="https://github.com/AnoopG7/TerraFusion.git"
 DEPLOY_DIR="/opt/terrafusion"
-BRANCH="${DEPLOY_BRANCH:-main}"
+BRANCH="main"
 LOG_FILE="/var/log/terrafusion-init.log"
 
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -13,14 +13,30 @@ echo "════════════════════════�
 echo "  TerraFusion — Server Initialization"
 echo "  Started: $(date)"
 echo "═══════════════════════════════════════════════════════════════"
+echo ""
 
-echo "[1/9] System Update"
+echo "────────────────────────────────────────────"
+echo "  [1/7] System Update"
+echo "────────────────────────────────────────────"
 apt update -y && apt upgrade -y
+echo "[✓] System updated."
+echo ""
 
-echo "[2/9] Installing Dependencies"
+echo "────────────────────────────────────────────"
+echo "  [2/7] Installing Dependencies"
+echo "────────────────────────────────────────────"
 apt install -y git curl wget sqlite3 ufw htop tree unzip jq vim default-mysql-client
 
-echo "[3/9] Installing Docker"
+echo "[*] Installing Node.js 22.x (for Jenkins pipeline)..."
+if ! command -v node &>/dev/null || [[ "$(node --version)" != v22* ]]; then
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  apt install -y nodejs
+  echo "[✓] Node.js: $(node --version)  npm: $(npm --version)"
+else
+  echo "[✓] Node.js already installed: $(node --version)"
+fi
+
+echo "[*] Installing Docker..."
 if ! command -v docker &>/dev/null; then
   curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
   sh /tmp/get-docker.sh
@@ -31,8 +47,12 @@ if ! docker compose version &>/dev/null; then
   apt install -y docker-compose-plugin
 fi
 usermod -aG docker ubuntu
+echo "[✓] Docker: $(docker --version)"
+echo ""
 
-echo "[4/9] Installing k3s (Lightweight Kubernetes)"
+echo "────────────────────────────────────────────"
+echo "  [3/7] Installing k3s & Helm"
+echo "────────────────────────────────────────────"
 if ! command -v k3s &>/dev/null; then
   curl -sfL https://get.k3s.io | sh -
   sleep 10
@@ -43,7 +63,6 @@ if ! command -v k3s &>/dev/null; then
   echo "export KUBECONFIG=/home/ubuntu/.kube/config" >> /home/ubuntu/.bashrc
 fi
 
-# Fix kubeconfig server IP for Docker container access (replace 127.0.0.1 with host private IP)
 if grep -q "server: https://127.0.0.1" /etc/rancher/k3s/k3s.yaml; then
   HOST_IP=$(ip -4 addr show | grep -oP 'inet \K10\.[0-9.]+|172\.1[6-9]\.[0-9.]+|172\.2[0-9]\.[0-9.]+|172\.3[0-1]\.[0-9.]+|192\.168\.[0-9.]+' | head -1)
   if [ -n "$HOST_IP" ]; then
@@ -52,15 +71,21 @@ if grep -q "server: https://127.0.0.1" /etc/rancher/k3s/k3s.yaml; then
   fi
 fi
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+chmod 644 /etc/rancher/k3s/k3s.yaml
+mkdir -p /var/lib/jenkins/.kube
+cp /etc/rancher/k3s/k3s.yaml /var/lib/jenkins/.kube/config
+chown -R jenkins:jenkins /var/lib/jenkins/.kube 2>/dev/null || true
 echo "k3s $(k3s --version | head -1)"
 
-echo "[5/9] Installing Helm"
 if ! command -v helm &>/dev/null; then
   curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 fi
 echo "Helm $(helm version --short)"
+echo ""
 
-echo "[6/9] Installing AWS CLI v2"
+echo "────────────────────────────────────────────"
+echo "  [4/7] Installing AWS CLI"
+echo "────────────────────────────────────────────"
 if ! command -v aws &>/dev/null; then
   curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
   unzip -q /tmp/awscliv2.zip -d /tmp
@@ -68,24 +93,11 @@ if ! command -v aws &>/dev/null; then
 fi
 echo "AWS CLI $(aws --version)"
 
-echo "[*] Configuring AWS credentials..."
-if [[ ! -f /home/ubuntu/.aws/credentials ]]; then
-  mkdir -p /home/ubuntu/.aws
-  cat > /home/ubuntu/.aws/credentials << EOF
-[default]
-aws_access_key_id = ${AWS_ACCESS_KEY_ID:-}
-aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY:-}
-EOF
-  cat > /home/ubuntu/.aws/config << EOF
-[default]
-region = ${AWS_REGION:-ap-south-1}
-output = json
-EOF
-  chown -R ubuntu:ubuntu /home/ubuntu/.aws
-  chmod 600 /home/ubuntu/.aws/credentials
-fi
+echo ""
 
-echo "[7/9] Cloning Repository"
+echo "────────────────────────────────────────────"
+echo "  [5/7] Cloning Repository"
+echo "────────────────────────────────────────────"
 if [[ -d "$DEPLOY_DIR" ]]; then
   cd "$DEPLOY_DIR"
   git fetch origin
@@ -94,101 +106,98 @@ else
   mkdir -p "$(dirname "$DEPLOY_DIR")"
   git clone --branch "$BRANCH" "$GIT_REPO" "$DEPLOY_DIR"
 fi
+echo "[✓] Repository cloned at $DEPLOY_DIR"
+echo ""
 
-echo "[8/9] Configuring Application"
+echo "────────────────────────────────────────────"
+echo "  [6/7] Configuring & Starting Application"
+echo "────────────────────────────────────────────"
 cd "$DEPLOY_DIR"
 
 cat > backend/.env << EOF
 PORT=3001
 DB_TYPE=mysql
-DB_HOST=${RDS_HOST:-localhost}
+DB_HOST=${RDS_HOST:-__REPLACE_ME__}
 DB_PORT=${RDS_PORT:-3306}
 DB_NAME=${RDS_DB_NAME:-terrafusion}
 DB_USER=${RDS_USER:-terrafusion_admin}
-DB_PASSWORD=${RDS_PASSWORD:-}
+DB_PASSWORD=${RDS_PASSWORD:-__RDS_PASSWORD__}
 JWT_SECRET=terrafusion-$(openssl rand -hex 16)
-
 AWS_REGION=${AWS_REGION:-ap-south-1}
-ECR_FRONTEND=${ECR_FRONTEND:-}
-ECR_BACKEND=${ECR_BACKEND:-}
-S3_BACKUP_BUCKET=${S3_BACKUP:-}
+S3_BACKUP_BUCKET=${S3_BACKUP_BUCKET:-}
 EOF
 
 chmod -R 755 .
 chmod 600 backend/.env
 
-echo "[9/9] Starting Application Stack"
-
-# Apply Kubernetes manifests (primary deployment target)
-echo "[*] Deploying to k3s..."
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-kubectl apply -f /opt/terrafusion/k8s/ 2>/dev/null || echo "[WARN] k8s manifests not yet present — will be deployed after git clone"
+kubectl create namespace terrafusion 2>/dev/null || true
 
-# Install metrics-server for HPA
+# Create k8s Secret with real values from .env (not placeholders)
+source backend/.env
+kubectl create secret generic backend-secret -n terrafusion \
+  --from-literal=DB_PASSWORD="${DB_PASSWORD}" \
+  --from-literal=JWT_SECRET="${JWT_SECRET}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl apply -f /opt/terrafusion/k8s/ 2>/dev/null || echo "[WARN] k8s manifests not yet present"
+
 echo "[*] Installing metrics-server..."
 if ! kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml; then
   echo "[ERROR] Failed to install metrics-server — check network connectivity"
-  echo "  Run manually: kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml"
 fi
 
-# Start Jenkins as Docker container
-echo "[*] Starting Jenkins..."
-docker volume create jenkins_home 2>/dev/null || true
-docker run -d \
-  --name jenkins-blueocean \
-  --restart unless-stopped \
-  -p 8080:8080 \
-  -p 50000:50000 \
-  -v jenkins_home:/var/jenkins_home \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$(which kubectl):/usr/local/bin/kubectl" \
-  -v /etc/rancher/k3s/k3s.yaml:/etc/rancher/k3s/k3s.yaml:ro \
-  jenkins/jenkins:lts-jdk17 || echo "[WARN] Jenkins start had issues"
+echo "[*] Setting up native Jenkins..."
+bash scripts/setup-jenkins.sh
 
-# Install Jenkins plugins automatically
-echo "[*] Installing Jenkins plugins..."
-echo "  Waiting for Jenkins to be ready..."
-for i in $(seq 1 30); do
-  if docker exec jenkins-blueocean test -f /var/jenkins_home/secrets/initialAdminPassword 2>/dev/null; then
-    echo "  Jenkins ready after ${i}s"
-    break
-  fi
-  sleep 2
-done
-docker run --rm \
-  -v jenkins_home:/var/jenkins_home \
-  jenkins/jenkins:lts-jdk17 \
-  jenkins-plugin-cli --plugins \
-    git \
-    workflow-aggregator \
-    pipeline-stage-view \
-    blueocean \
-    docker-workflow \
-    kubernetes-cli \
-    aws-credentials \
-    credentials-binding 2>&1 || echo "[WARN] Plugin install had issues"
+echo "[*] Installing Helm charts (Prometheus/Grafana, ELK, Vault)..."
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
+helm repo add elastic https://helm.elastic.co 2>/dev/null || true
+helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
+helm repo update 2>/dev/null || true
 
-# Restart Jenkins to load plugins
-docker restart jenkins-blueocean || true
+helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+  -n monitoring --create-namespace -f helm/prometheus-values.yaml --wait --timeout 5m 2>/dev/null || \
+  echo "  [WARN] Prometheus/Grafana install timed out — run manually later"
 
-# Store backend secrets in Vault
+helm upgrade --install elasticsearch elastic/elasticsearch \
+  -n logging --create-namespace -f helm/elasticsearch-values.yaml --wait --timeout 5m 2>/dev/null || \
+  echo "  [WARN] Elasticsearch install timed out — run manually later"
+
+helm upgrade --install kibana elastic/kibana \
+  -n logging -f helm/kibana-values.yaml --wait --timeout 3m 2>/dev/null || \
+  echo "  [WARN] Kibana install timed out — run manually later"
+
+helm upgrade --install filebeat elastic/filebeat \
+  -n logging -f helm/filebeat-config.yaml --wait --timeout 3m 2>/dev/null || \
+  echo "  [WARN] Filebeat install timed out — run manually later"
+
+helm upgrade --install vault hashicorp/vault \
+  -n vault --create-namespace -f helm/vault-values.yaml --wait --timeout 3m 2>/dev/null || \
+  echo "  [WARN] Vault install timed out — run manually later"
+
 echo "[*] Configuring Vault secrets..."
-if kubectl get pod -n vault -l app.kubernetes.io/name=vault --field-selector=status.phase=Running 2>/dev/null | grep -q vault; then
+for i in $(seq 1 30); do
   VAULT_POD=$(kubectl get pod -n vault -l app.kubernetes.io/name=vault -o name 2>/dev/null | head -1)
-  if [ -n "$VAULT_POD" ]; then
-    kubectl exec -n vault "$VAULT_POD" -- vault kv put secret/terrafusion/backend \
-      DB_PASSWORD="${RDS_PASSWORD:-}" \
-      JWT_SECRET="$(grep JWT_SECRET backend/.env | cut -d= -f2)" \
-      DB_HOST="${RDS_HOST:-localhost}" \
-      DB_NAME="${RDS_DB_NAME:-terrafusion}" 2>/dev/null && \
-      echo "  [✓] Backend secrets stored in Vault" || \
-      echo "  [WARN] Vault secret store failed — may need manual setup"
-  fi
+  if [ -n "$VAULT_POD" ]; then break; fi
+  sleep 5
+done
+if [ -n "$VAULT_POD" ]; then
+  kubectl exec -n vault "$VAULT_POD" -- vault kv put secret/terrafusion/backend \
+    DB_PASSWORD="${DB_PASSWORD}" \
+    JWT_SECRET="${JWT_SECRET}" \
+    DB_HOST="${DB_HOST:-__REPLACE_ME__}" \
+    DB_NAME="${RDS_DB_NAME:-terrafusion}" 2>/dev/null && \
+    echo "  [✓] Backend secrets stored in Vault" || \
+    echo "  [WARN] Vault secret store failed — may need manual setup"
 else
-  echo "  [WARN] Vault pod not found — install Vault first: helm upgrade --install vault hashicorp/vault -n vault --create-namespace -f helm/vault-values.yaml"
-  echo "  Then run: kubectl exec -n vault deploy/vault -- vault kv put secret/terrafusion/backend DB_PASSWORD=... JWT_SECRET=..."
+  echo "  [WARN] Vault pod not found after installation — may need manual setup"
 fi
+echo ""
 
+echo "────────────────────────────────────────────"
+echo "  [7/7] Post-Deployment Verification"
+echo "────────────────────────────────────────────"
 sleep 5
 echo ""
 echo "--- Docker Containers ---"
@@ -200,7 +209,12 @@ kubectl get nodes || echo "k3s not ready yet"
 
 echo ""
 echo "--- API Health ---"
-curl -s --max-time 5 http://localhost:3001/api/health || echo "Health check pending"
+BACKEND_POD=$(kubectl get pod -n terrafusion -l app=backend -o name 2>/dev/null | head -1)
+if [ -n "$BACKEND_POD" ]; then
+  kubectl exec -n terrafusion "$BACKEND_POD" -- curl -s --max-time 5 http://localhost:3001/api/health || echo "Health check pending"
+else
+  echo "Backend pod not ready yet"
+fi
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
@@ -208,10 +222,8 @@ echo "  Initialization Complete!"
 echo "  Time: $(date)"
 echo "  Log:  $LOG_FILE"
 echo ""
-JENKINS_PASS=$(docker exec jenkins-blueocean cat /var/jenkins_home/secrets/initialAdminPassword 2>/dev/null || echo "check jenkins logs")
-echo "  Jenkins:  http://$(curl -s http://checkip.amazonaws.com):8080"
-echo "  Jenkins initial password: ${JENKINS_PASS}"
-echo "  Frontend: http://$(curl -s http://checkip.amazonaws.com)"
+echo "  Jenkins:  http://$(curl -s http://checkip.amazonaws.com):8080 (admin / admin123)"
+echo "  Frontend: http://$(curl -s http://checkip.amazonaws.com):30080"
 echo "  Grafana:  http://$(curl -s http://checkip.amazonaws.com):30300 (admin:admin)"
 echo "  Kibana:   http://$(curl -s http://checkip.amazonaws.com):30560"
 echo "  Vault:    http://$(curl -s http://checkip.amazonaws.com):30820 (token: root)"

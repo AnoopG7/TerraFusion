@@ -9,7 +9,7 @@ output "public_subnet_id" {
 }
 
 output "private_subnet_ids" {
-  description = "Private subnet IDs (RDS)"
+  description = "Private subnet IDs (RDS, one per AZ)"
   value       = aws_subnet.private[*].id
 }
 
@@ -53,24 +53,14 @@ output "rds_master_username" {
   value       = aws_db_instance.mysql.username
 }
 
-output "ecr_frontend_url" {
-  description = "ECR repository URL for frontend"
-  value       = aws_ecr_repository.frontend.repository_url
-}
-
-output "ecr_backend_url" {
-  description = "ECR repository URL for backend"
-  value       = aws_ecr_repository.backend.repository_url
-}
-
-output "s3_backup_bucket" {
-  description = "S3 bucket name for backups"
-  value       = aws_s3_bucket.backup.bucket
+output "rds_security_group_id" {
+  description = "RDS security group ID"
+  value       = aws_security_group.rds.id
 }
 
 output "ssh_command" {
-  description = "SSH command to connect"
-  value       = "ssh -i ~/.ssh/id_rsa ubuntu@${aws_instance.main.public_ip}"
+  description = "SSH command to connect to the EC2 instance"
+  value       = "ssh -i ~/.ssh/${var.key_pair_name}.pem ubuntu@${aws_instance.main.public_ip}"
 }
 
 output "jenkins_url" {
@@ -79,13 +69,23 @@ output "jenkins_url" {
 }
 
 output "application_url" {
-  description = "URL to access frontend"
-  value       = "http://${aws_instance.main.public_ip}"
+  description = "URL to access the TerraFusion application (frontend NodePort)"
+  value       = "http://${aws_instance.main.public_ip}:30080"
 }
 
-output "kubeconfig_command" {
-  description = "Command to get k3s kubeconfig"
-  value       = "ssh -i ~/.ssh/id_rsa ubuntu@${aws_instance.main.public_ip} 'sudo cat /etc/rancher/k3s/k3s.yaml'"
+output "grafana_url" {
+  description = "Grafana dashboard URL"
+  value       = "http://${aws_instance.main.public_ip}:30300"
+}
+
+output "kibana_url" {
+  description = "Kibana logging URL"
+  value       = "http://${aws_instance.main.public_ip}:30560"
+}
+
+output "vault_url" {
+  description = "Vault UI URL"
+  value       = "http://${aws_instance.main.public_ip}:30820"
 }
 
 output "rds_connection_params" {

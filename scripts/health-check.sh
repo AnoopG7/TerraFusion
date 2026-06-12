@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API_URL="http://localhost:3001/api/health"
 DISK_WARN_PCT=80
 MEM_WARN_PCT=80
 ALERT_LOG="/var/log/terrafusion/health-alerts.log"
@@ -18,12 +17,20 @@ echo "=== TerraFusion Health Check @ $(now) ==="
 FAILED=0
 
 echo "  1. API HEALTH"
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$API_URL" 2>/dev/null || echo "000")
-if [[ "$HTTP_CODE" == "200" ]]; then
-  echo "   [✓] API is healthy (HTTP $HTTP_CODE)"
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+BACKEND_POD=$(kubectl get pod -n terrafusion -l app=backend -o name 2>/dev/null | head -1)
+if [ -n "$BACKEND_POD" ]; then
+  HTTP_CODE=$(kubectl exec -n terrafusion "$BACKEND_POD" -- curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://localhost:3001/api/health 2>/dev/null || echo "000")
+  if [[ "$HTTP_CODE" == "200" ]]; then
+    echo "   [✓] API is healthy (HTTP $HTTP_CODE)"
+  else
+    echo "   [✗] API returned HTTP $HTTP_CODE"
+    alert "CRITICAL" "API health check failed: HTTP $HTTP_CODE"
+    FAILED=$((FAILED + 1))
+  fi
 else
-  echo "   [✗] API returned HTTP $HTTP_CODE"
-  alert "CRITICAL" "API health check failed: HTTP $HTTP_CODE"
+  echo "   [✗] No backend pod found"
+  alert "CRITICAL" "No backend pod found for health check"
   FAILED=$((FAILED + 1))
 fi
 
@@ -46,14 +53,27 @@ if command -v kubectl &>/dev/null; then
   fi
 fi
 
-echo "  3. k3s KUBERNETES"
+echo "  3. APPLICATION RESPONSE VALIDITY"
+BACKEND_POD=$(kubectl get pod -n terrafusion -l app=backend -o name 2>/dev/null | head -1)
+if [ -n "$BACKEND_POD" ] && command -v kubectl &>/dev/null; then
+  RESPONSE=$(kubectl exec -n terrafusion "$BACKEND_POD" -- curl -s --max-time 5 http://localhost:3001/api/health 2>/dev/null || echo '{"status":"error"}')
+  STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unknown")
+  if [[ "$STATUS" == "ok" ]]; then
+    echo "   [✓] Backend API response valid"
+  else
+    echo "   [✗] Backend API returned unexpected status: $STATUS"
+    FAILED=$((FAILED + 1))
+  fi
+fi
+
+echo "  4. k3s KUBERNETES"
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 if command -v kubectl &>/dev/null; then
   kubectl get nodes 2>/dev/null | grep -q Ready && echo "   [✓] k3s nodes ready" || { echo "   [✗] k3s nodes not ready"; FAILED=$((FAILED + 1)); }
   kubectl get pods -n terrafusion 2>/dev/null | grep -q Running && echo "   [✓] App pods running" || { echo "   [✗] App pods not running"; }
 fi
 
-echo "  4. DISK USAGE"
+echo "  5. DISK USAGE"
 df -h / | tail -1 | awk '{print "   Root: " $5 " used (" $3 "/" $2 ")"}'
 df -h / | tail -1 | awk '{gsub(/%/, "", $5); if ($5+0 > '"$DISK_WARN_PCT"') exit 1}' || {
   echo "   [✗] Disk exceeds ${DISK_WARN_PCT}%!"
@@ -61,7 +81,7 @@ df -h / | tail -1 | awk '{gsub(/%/, "", $5); if ($5+0 > '"$DISK_WARN_PCT"') exit
   FAILED=$((FAILED + 1))
 }
 
-echo "  5. MEMORY USAGE"
+echo "  6. MEMORY USAGE"
 if command -v free &>/dev/null; then
   MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
   MEM_USED=$(free -m | awk '/^Mem:/{print $3}')
@@ -72,9 +92,14 @@ if command -v free &>/dev/null; then
     alert "WARNING" "Memory at ${MEM_PCT}%"
     FAILED=$((FAILED + 1))
   fi
+
+  SWAP_USED=$(free -m | awk '/^Swap:/{print $3}')
+  if [[ "${SWAP_USED:-0}" -gt 0 ]]; then
+    echo "   Swap: ${SWAP_USED}MB used"
+  fi
 fi
 
-echo "  6. RDS CONNECTIVITY"
+echo "  7. RDS CONNECTIVITY"
 if [[ -f /opt/terrafusion/backend/.env ]]; then
   source /opt/terrafusion/backend/.env
   if [[ "${DB_TYPE:-sqlite}" == "mysql" ]]; then

@@ -65,37 +65,13 @@ variable "rds_master_password" {
 }
 
 variable "ssh_allowed_cidr" {
-  description = "Your IP CIDR for SSH + Jenkins + K8s API access"
+  description = "YOUR IP CIDR for SSH + Jenkins + K8s API access (e.g. 203.0.113.5/32). Find it: curl -s http://checkip.amazonaws.com"
   type        = string
 }
 
-variable "public_key_path" {
-  description = "Absolute path to your SSH public key"
+variable "key_pair_name" {
+  description = "Name of your existing AWS key pair (created in AWS Console, ap-south-1)"
   type        = string
-}
-
-variable "aws_access_key_id" {
-  description = "AWS access key ID for EC2 (your existing IAM user)"
-  type        = string
-  sensitive   = true
-}
-
-variable "aws_secret_access_key" {
-  description = "AWS secret access key for EC2 (your existing IAM user)"
-  type        = string
-  sensitive   = true
-}
-
-variable "git_repo_url" {
-  description = "Git repository URL for the app"
-  type        = string
-  default     = "https://github.com/YOUR_ORG/terrafusion-platform.git"
-}
-
-variable "deploy_branch" {
-  description = "Git branch to deploy"
-  type        = string
-  default     = "main"
 }
 
 variable "environment" {

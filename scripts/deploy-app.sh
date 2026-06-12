@@ -22,28 +22,33 @@ log "[*] Pulling latest code..."
 git fetch origin
 git reset --hard "origin/$BRANCH"
 
-source backend/.env
-
-log "[*] Logging in to ECR..."
-aws ecr get-login-password --region "$AWS_REGION" | \
-  docker login --username AWS --password-stdin "$(echo $ECR_BACKEND | cut -d/ -f1)"
-
 log "[*] Building backend Docker image..."
-docker build -t terrafusion-backend:latest ./backend
-docker tag terrafusion-backend:latest "${ECR_BACKEND}:${TIMESTAMP}"
-docker tag terrafusion-backend:latest "${ECR_BACKEND}:latest"
-docker push "${ECR_BACKEND}:${TIMESTAMP}"
-docker push "${ECR_BACKEND}:latest"
+docker build -t terrafusion-backend:"$TIMESTAMP" ./backend
+docker tag terrafusion-backend:"$TIMESTAMP" terrafusion-backend:latest
 
 log "[*] Building frontend Docker image..."
-docker build -t terrafusion-frontend:latest ./frontend
-docker tag terrafusion-frontend:latest "${ECR_FRONTEND}:${TIMESTAMP}"
-docker tag terrafusion-frontend:latest "${ECR_FRONTEND}:latest"
-docker push "${ECR_FRONTEND}:${TIMESTAMP}"
-docker push "${ECR_FRONTEND}:latest"
+docker build -t terrafusion-frontend:"$TIMESTAMP" ./frontend
+docker tag terrafusion-frontend:"$TIMESTAMP" terrafusion-frontend:latest
+
+log "[*] Importing images into containerd..."
+docker save terrafusion-backend:"$TIMESTAMP" terrafusion-frontend:"$TIMESTAMP" | k3s ctr images import - || {
+  log "[!] Image import failed — retrying with Docker -> containerd sync"
+  docker save terrafusion-backend:"$TIMESTAMP" | k3s ctr images import -
+  docker save terrafusion-frontend:"$TIMESTAMP" | k3s ctr images import -
+}
 
 log "[*] Deploying to k3s..."
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+# Recreate secret with real values from .env (never apply placeholder secret.yaml)
+if [ -f backend/.env ]; then
+  source backend/.env
+  kubectl create secret generic backend-secret -n terrafusion \
+    --from-literal=DB_PASSWORD="${DB_PASSWORD}" \
+    --from-literal=JWT_SECRET="${JWT_SECRET}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+fi
+
 kubectl apply -f "${K8S_MANIFESTS}/"
 
 log "[*] Watching rollout..."
@@ -73,6 +78,6 @@ docker image prune -f > /dev/null 2>&1 || true
 
 log ""
 log "=== Deployment Complete ==="
-log "Backend: ${ECR_BACKEND}:${TIMESTAMP}"
-log "Frontend: ${ECR_FRONTEND}:${TIMESTAMP}"
+log "Backend: terrafusion-backend:${TIMESTAMP}"
+log "Frontend: terrafusion-frontend:${TIMESTAMP}"
 kubectl get pods -n terrafusion

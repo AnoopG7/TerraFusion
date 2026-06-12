@@ -6,13 +6,12 @@ terraform {
       version = "~> 5.0"
     }
   }
-  backend "s3" {
-    bucket         = "terrafusion-terraform-state"
-    key            = "infra/terraform.tfstate"
-    region         = "ap-south-1"
-    dynamodb_table = "terrafusion-terraform-locks"
-    encrypt        = true
-  }
+  # Uses local state by default.
+  # Migrate to S3 remote state:
+  #   terraform init -migrate \
+  #     -backend-config="bucket=terrafusion-terraform-state" \
+  #     -backend-config="key=infra/terraform.tfstate" \
+  #     -backend-config="region=ap-south-1"
 }
 
 provider "aws" {

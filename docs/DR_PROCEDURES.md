@@ -19,13 +19,13 @@ kubectl delete pod -n terrafusion -l app=backend
 curl http://localhost:30080/api/health  # Should still return 200
 ```
 
-**RTO:** <10 seconds | **RPO:** 0 (no data loss — stateless)
+**RTO:** <10 seconds | **RPO:** 0 (stateless)
 
 ---
 
 ## Scenario 2: Node Failure
 
-**Trigger:** `sudo systemctl stop k3s` or terminate EC2 (via AWS console)
+**Trigger:** `sudo systemctl stop k3s` or terminate EC2
 
 **Expected behavior (k3s single-node):**
 1. k3s systemd service stops → all pods become unreachable
@@ -51,24 +51,16 @@ curl http://localhost:30080/api/health  # Should return 200
 **Trigger:** `aws rds reboot-db-instance --db-instance-identifier terrafusion-mysql`
 
 **Expected behavior:**
-1. RDS restarts in-place, brief downtime
+1. RDS restarts in-place, brief downtime (~30-60s)
 2. Backend connection pool detects dropped connection, retries
-3. Backend reconnects to RDS automatically
+3. Backend reconnects automatically
 
 **How to demo:**
 ```bash
-# Before: Check current RDS status
-aws rds describe-db-instances --db-instance-identifier terrafusion-mysql --query 'DBInstances[0].{Status:DBInstanceStatus}'
-
-# Trigger reboot
 aws rds reboot-db-instance --db-instance-identifier terrafusion-mysql
-
-# Watch backend reconnection
 kubectl logs -n terrafusion -l app=backend --tail=20 -f
-# You'll see: "Can't connect to MySQL server" → retry → connected
-
-# App should recover within 30-60 seconds
-curl http://localhost:30080/api/sensors  # Should return data
+# You'll see: "Can't connect to MySQL server" → reconnects
+curl http://localhost:30080/api/sensors  # Should recover within 60s
 ```
 
 **RTO:** ~60 seconds | **RPO:** Negligible (in-flight transactions lost)
@@ -77,23 +69,16 @@ curl http://localhost:30080/api/sensors  # Should return data
 
 ## Scenario 4: Failed Deployment (Jenkins Rollback)
 
-**Trigger:** Push code that breaks the health check, or deploy a bad image
+**Trigger:** Deploy code that breaks the health check
 
 **Expected behavior:**
-1. Jenkins pipeline: Build → Push → Deploy → Smoke test
+1. Jenkins pipeline: Build → Push to ECR → Deploy to k3s → Smoke test
 2. Smoke test fails (curl returns non-200)
 3. Jenkins catches failure → `kubectl rollout undo`
 4. Previous version is restored
 
 **How to demo:**
 ```bash
-# Deploy intentionally bad version
-kubectl set image deployment/backend -n terrafusion backend=nginx:latest
-
-# Watch rollout fail
-kubectl rollout status deployment/backend -n terrafusion
-# Pods will be CrashLoopBackOff because Nginx != Express
-
 # Trigger Jenkins pipeline with bad code
 # Jenkins will:
 #   1. Build and push broken image
@@ -101,13 +86,20 @@ kubectl rollout status deployment/backend -n terrafusion
 #   3. Smoke test fails
 #   4. Auto-rollback to last good version
 
+# Or simulate bad deploy:
+kubectl set image deployment/backend -n terrafusion backend=nginx:latest
+kubectl rollout status deployment/backend -n terrafusion
+# Pods will be CrashLoopBackOff
+
+# Roll back manually:
+kubectl rollout undo deployment/backend -n terrafusion
+
 # Verify recovery
-kubectl rollout history deployment/backend -n terrafusion
 kubectl get pods -n terrafusion  # Should be Running
 curl http://localhost:30080/api/health  # Should be 200
 ```
 
-**RTO:** ~2-3 minutes (build + deploy + rollback) | **RPO:** 0
+**RTO:** ~2-3 minutes | **RPO:** 0
 
 ---
 
@@ -116,27 +108,23 @@ curl http://localhost:30080/api/health  # Should be 200
 **Trigger:** Generate load on backend to trigger HorizontalPodAutoscaler
 
 **Expected behavior:**
-1. High CPU on backend pods ( > 70% )
+1. High CPU on backend pods (>70%)
 2. HPA scales backend from 2 → up to 5 replicas
 3. Load distributes across pods
 4. CPU per pod drops
-5. When load stops, HPA scales back down (cooldown period)
+5. When load stops, HPA scales back down
 
 **How to demo:**
 ```bash
-# Watch HPA and pods
 kubectl get hpa -n terrafusion -w
 kubectl get pods -n terrafusion -w
 
-# Generate load (in another terminal)
+# Generate load:
 kubectl run -it --rm load-gen --image=busybox -- sh -c "
   while true; do
     wget -q -O- http://backend.terrafusion.svc:3001/api/sensors > /dev/null 2>&1
   done
 "
-
-# Watch replicas increase from 2 → 3 → 4 → 5
-# CPU will drop as load spreads
 ```
 
 **RTO:** Auto | **RPO:** 0
@@ -145,27 +133,22 @@ kubectl run -it --rm load-gen --image=busybox -- sh -c "
 
 ## Scenario 6: Log Flood / Disk Full
 
-**Trigger:** Generate excessive logs on a pod
+**Trigger:** Generate excessive logs
 
 **Expected behavior:**
 1. Filebeat DaemonSet ships logs → Elasticsearch
 2. Log rotate cron job compresses old logs (weekly)
 3. Docker log truncation frees disk space
-4. Prometheus alert fires if disk > 90%
 
 **How to demo:**
 ```bash
 # Check current disk
 df -h /
 
-# Show log shipping works
-kubectl port-forward -n logging svc/kibana-kibana 5601:5601
-# Open localhost:5601 → Discover → see logs from terrafusion namespace
-
 # Show log rotation
 sudo /opt/terrafusion/scripts/rotate-logs.sh
 
-# Show disk recovery
+# Verify recovery
 df -h /
 ```
 
@@ -181,5 +164,5 @@ df -h /
 | Node failure | Systemd watch | k3s restart | <60s |
 | RDS reboot | Connection timeout | RDS restart | <60s |
 | Failed deploy | Smoke test fails | Jenkins rollback | <3min |
-| High load | HPA metric > 70% | Scale up replicas | <2min |
+| High load | HPA metric >70% | Scale up replicas | <2min |
 | Disk full | Cron + Prometheus alert | Log rotate + prune | Weekly |

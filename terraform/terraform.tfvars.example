@@ -1,5 +1,9 @@
-ssh_allowed_cidr      = "203.0.113.5/32"
-rds_master_password   = "YourStrongPassword123!"
-public_key_path       = "/Users/you/.ssh/id_rsa.pub"
-aws_access_key_id     = "AKIAXXXXXXXXXX"
-aws_secret_access_key = "xxxxxxxxxxxxxxxxxxxxxxxxx"
+# ── REQUIRED: Your public IP for SSH + Jenkins + K8s API access ──
+# Find it: curl -s http://checkip.amazonaws.com
+ssh_allowed_cidr = "203.0.113.5/32"
+
+# ── REQUIRED: RDS master password ──
+rds_master_password = "YourStrongPassword123!"
+
+# ── REQUIRED: Name of your existing AWS key pair (created in AWS Console, ap-south-1) ──
+key_pair_name = "ec2-key"

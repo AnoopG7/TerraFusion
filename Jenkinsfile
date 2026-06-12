@@ -4,9 +4,6 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION         = 'ap-south-1'
-        ECR_FRONTEND       = 'XXXXXXXXXXXX.dkr.ecr.ap-south-1.amazonaws.com/terrafusion-frontend'
-        ECR_BACKEND        = 'XXXXXXXXXXXX.dkr.ecr.ap-south-1.amazonaws.com/terrafusion-backend'
         K8S_NAMESPACE      = 'terrafusion'
         K8S_MANIFESTS      = 'k8s/'
         DEPLOY_DIR         = '/opt/terrafusion'
@@ -43,20 +40,18 @@ pipeline {
             }
         }
 
-        stage('Push to ECR') {
+        stage('Import to k3s') {
             steps {
                 script {
                     sh """
-                        aws ecr get-login-password --region ${AWS_REGION} | \
-                            docker login --username AWS --password-stdin ${ECR_BACKEND%/*}
-                        docker tag terrafusion-backend:${TIMESTAMP} ${ECR_BACKEND}:${TIMESTAMP}
-                        docker tag terrafusion-backend:latest ${ECR_BACKEND}:latest
-                        docker tag terrafusion-frontend:${TIMESTAMP} ${ECR_FRONTEND}:${TIMESTAMP}
-                        docker tag terrafusion-frontend:latest ${ECR_FRONTEND}:latest
-                        docker push ${ECR_BACKEND}:${TIMESTAMP}
-                        docker push ${ECR_BACKEND}:latest
-                        docker push ${ECR_FRONTEND}:${TIMESTAMP}
-                        docker push ${ECR_FRONTEND}:latest
+                        docker tag terrafusion-backend:${TIMESTAMP} terrafusion-backend:latest
+                        docker tag terrafusion-frontend:${TIMESTAMP} terrafusion-frontend:latest
+                        docker save terrafusion-backend:${TIMESTAMP} terrafusion-frontend:${TIMESTAMP} | \
+                            k3s ctr images import - || {
+                            echo "Batch import failed — trying individual imports"
+                            docker save terrafusion-backend:${TIMESTAMP} | k3s ctr images import -
+                            docker save terrafusion-frontend:${TIMESTAMP} | k3s ctr images import -
+                        }
                     """
                 }
             }
@@ -68,9 +63,9 @@ pipeline {
                     sh """
                         export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
                         kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml set image deployment/backend -n ${K8S_NAMESPACE} \
-                            backend=${ECR_BACKEND}:${TIMESTAMP}
+                            backend=terrafusion-backend:${TIMESTAMP}
                         kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml set image deployment/frontend -n ${K8S_NAMESPACE} \
-                            frontend=${ECR_FRONTEND}:${TIMESTAMP}
+                            frontend=terrafusion-frontend:${TIMESTAMP}
                     """
                 }
             }
