@@ -148,7 +148,7 @@ if ! kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases
 fi
 
 echo "[*] Setting up native Jenkins..."
-bash scripts/setup-jenkins.sh
+bash scripts/setup-jenkins.sh || echo "  [WARN] Jenkins setup had issues — check /var/log/jenkins-setup.log"
 
 echo "[*] Installing Helm charts (Prometheus/Grafana, ELK, Vault)..."
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
@@ -161,15 +161,25 @@ helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
   echo "  [WARN] Prometheus/Grafana install timed out — run manually later"
 
 helm upgrade --install elasticsearch elastic/elasticsearch \
-  -n logging --create-namespace -f helm/elasticsearch-values.yaml --wait --timeout 5m 2>/dev/null || \
+  -n logging --create-namespace -f helm/elasticsearch-values.yaml \
+  --version 8.5.1 --wait --timeout 5m 2>/dev/null || \
   echo "  [WARN] Elasticsearch install timed out — run manually later"
 
+echo "[*] Waiting for Elasticsearch to be ready..."
+kubectl wait --for=condition=ready pod -n logging -l app=elasticsearch-master --timeout=120s 2>/dev/null || \
+  echo "  [WARN] ES pod not ready yet"
+
+# Clean up any dangling Kibana pre-install jobs from previous failed installs
+kubectl delete job -n logging -l app=kibana 2>/dev/null || true
+
 helm upgrade --install kibana elastic/kibana \
-  -n logging -f helm/kibana-values.yaml --wait --timeout 3m 2>/dev/null || \
+  -n logging -f helm/kibana-values.yaml \
+  --version 8.5.1 --wait --timeout 3m 2>/dev/null || \
   echo "  [WARN] Kibana install timed out — run manually later"
 
 helm upgrade --install filebeat elastic/filebeat \
-  -n logging -f helm/filebeat-config.yaml --wait --timeout 3m 2>/dev/null || \
+  -n logging -f helm/filebeat-config.yaml \
+  --version 8.5.1 --wait --timeout 3m 2>/dev/null || \
   echo "  [WARN] Filebeat install timed out — run manually later"
 
 helm upgrade --install vault hashicorp/vault \

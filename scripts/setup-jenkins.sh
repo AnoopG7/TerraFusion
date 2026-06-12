@@ -18,14 +18,22 @@ apt install -y openjdk-21-jdk 2>/dev/null || {
 }
 echo "[✓] Java: $(java --version | head -1)"
 
-# ── 2. Install Jenkins from apt repo ──
+# ── 2. Install Jenkins from official apt repo ──
 echo "[2/6] Installing Jenkins from apt repo..."
-if [ ! -f /usr/share/keyrings/jenkins-keyring.asc ]; then
-  curl -fsSL https://pkg.jenkins.io/debian/jenkins.io-2023.key -o /usr/share/keyrings/jenkins-keyring.asc
-fi
-echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian binary/" > /etc/apt/sources.list.d/jenkins.list
-apt update -y
+
+# Remove any previous sources/keys
+rm -f /etc/apt/sources.list.d/jenkins.list
+rm -f /usr/share/keyrings/jenkins-keyring.asc /usr/share/keyrings/jenkins-keyring.gpg
+rm -f /etc/apt/keyrings/jenkins-keyring.asc
+
+apt install -y fontconfig openjdk-21-jre 2>/dev/null || true
+
+mkdir -p /etc/apt/keyrings
+wget -q -O /etc/apt/keyrings/jenkins-keyring.asc https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
+echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" > /etc/apt/sources.list.d/jenkins.list
+apt update -y 2>/dev/null || true
 apt install -y jenkins
+systemctl enable jenkins
 echo "[✓] Jenkins installed: $(dpkg -l jenkins 2>/dev/null | awk '/^ii/ {print $3}')"
 
 # ── 3. Configure Jenkins (systemd memory + init.groovy.d) ──
@@ -33,7 +41,7 @@ echo "[3/6] Configuring Jenkins..."
 mkdir -p /etc/systemd/system/jenkins.service.d
 cat > /etc/systemd/system/jenkins.service.d/override.conf << 'EOF'
 [Service]
-Environment="JAVA_OPTS=-Xmx256m -Xms128m"
+Environment="JAVA_OPTS=-Xmx256m -Xms128m -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true"
 EOF
 systemctl daemon-reload
 
@@ -54,19 +62,10 @@ done
 cat > "${INIT_DIR}/01-admin-user.groovy" << 'GROOVY'
 import jenkins.model.*
 import hudson.security.*
+import jenkins.install.*
 
 def instance = Jenkins.getInstanceOrNull()
 if (instance == null) return
-
-// Remove existing admin user if any (idempotent)
-def existing = instance.getSecurityRealm().allUsers
-if (existing != null) {
-  existing.each { u ->
-    if (u.getId() == "admin") {
-      instance.getSecurityRealm().deleteUser("admin")
-    }
-  }
-}
 
 def hudsonRealm = new HudsonPrivateSecurityRealm(false)
 hudsonRealm.createAccount("admin", "admin123")
@@ -76,8 +75,9 @@ def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
 strategy.setAllowAnonymousRead(false)
 instance.setAuthorizationStrategy(strategy)
 
+instance.setInstallState(InstallState.INITIAL_SETUP_COMPLETED)
 instance.save()
-println "init: admin user created (admin/admin123)"
+println "init: admin user created (admin/admin123), setup wizard skipped"
 GROOVY
 
 cat > "${INIT_DIR}/02-jenkins-url.groovy" << 'GROOVY'
@@ -112,68 +112,46 @@ sleep 15
 PASS=$(cat /var/lib/jenkins/secrets/initialAdminPassword 2>/dev/null || echo "")
 echo "[✓] Initial admin password (before groovy override): $PASS"
 
-# ── 5. Create Pipeline job ──
-echo "[5/6] Creating Pipeline job..."
-
-python3 << 'PYEOF' > /tmp/pipeline-config.xml
-import xml.etree.ElementTree as ET
-
-root = ET.Element("flow-definition")
-root.set("plugin", "workflow-job@1571.1580.v18e46842c125")
-
-ET.SubElement(root, "actions")
-ET.SubElement(root, "description").text = "TerraFusion CI/CD Pipeline"
-ET.SubElement(root, "keepDependencies").text = "false"
-
-# Properties
-props = ET.SubElement(root, "properties")
-
-# SCM trigger: poll every 5 minutes
-trig = ET.SubElement(props, "hudson.triggers.SCMTrigger")
-ET.SubElement(trig, "spec").text = "H/5 * * * *"
-ET.SubElement(trig, "ignorePostCommitHooks").text = "false"
-
-# Definition: CpsScmFlowDefinition referencing Jenkinsfile from repo
-definition = ET.SubElement(root, "definition")
-definition.set("class", "org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition")
-definition.set("plugin", "workflow-cps@4331.v9d06ed4658ff")
-
-scm = ET.SubElement(definition, "scm")
-scm.set("class", "hudson.plugins.git.GitSCM")
-scm.set("plugin", "git@5.6.0")
-
-ET.SubElement(scm, "configVersion").text = "2"
-
-userRemoteConfigs = ET.SubElement(scm, "userRemoteConfigs")
-remoteConfig = ET.SubElement(userRemoteConfigs, "hudson.plugins.git.UserRemoteConfig")
-ET.SubElement(remoteConfig, "url").text = "https://github.com/AnoopG7/TerraFusion.git"
-
-branches = ET.SubElement(scm, "branches")
-branchSpec = ET.SubElement(branches, "hudson.plugins.git.BranchSpec")
-ET.SubElement(branchSpec, "name").text = "*/main"
-
-ET.SubElement(definition, "scriptPath").text = "Jenkinsfile"
-ET.SubElement(definition, "lightweightCheckout").text = "true"
-
-ET.SubElement(root, "disabled").text = "false"
-
-xml_str = ET.tostring(root, encoding="unicode", xml_declaration=False)
-xml_str = '<?xml version="1.1" encoding="UTF-8"?>\n' + xml_str
-print(xml_str)
-PYEOF
-
-mkdir -p /var/lib/jenkins/jobs/terrafusion-pipeline
-cp /tmp/pipeline-config.xml /var/lib/jenkins/jobs/terrafusion-pipeline/config.xml
-chown -R jenkins:jenkins /var/lib/jenkins/jobs/terrafusion-pipeline
-echo "[✓] Pipeline job config written"
-
-# ── 6. Install plugins + trigger ──
-echo "[6/6] Installing plugins & triggering build..."
-
 JENKINS_COOKIE=$(mktemp)
 CRUMB_JSON=$(curl -s -u "admin:admin123" -c "$JENKINS_COOKIE" "$JENKINS_URL/crumbIssuer/api/json")
 CRUMB=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumb'])" 2>/dev/null || echo "")
 CRUMB_HEADER=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumbRequestField'])" 2>/dev/null || echo "Jenkins-Crumb")
+
+# ── 5. Create Pipeline job ──
+echo "[5/7] git safe.directory for Jenkins..."
+su - jenkins -c "git config --global --add safe.directory /opt/terrafusion" 2>/dev/null || true
+su - jenkins -c "git config --global --add safe.directory '*' 2>/dev/null" || true
+echo "[✓] safe.directory configured"
+
+echo "[6/7] Creating Pipeline job via Script Console..."
+
+curl -s -X POST -u "admin:admin123" -b "$JENKINS_COOKIE" \
+  -H "${CRUMB_HEADER}: ${CRUMB}" \
+  "$JENKINS_URL/scriptText" \
+  --data-urlencode 'script=import jenkins.model.Jenkins
+import org.jenkinsci.plugins.workflow.job.WorkflowJob
+import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
+import hudson.plugins.git.GitSCM
+import hudson.plugins.git.UserRemoteConfig
+import hudson.plugins.git.BranchSpec
+
+def j = Jenkins.getInstanceOrNull()
+def name = "terrafusion-pipeline"
+def existing = j.getItem(name)
+if (existing != null) { existing.delete() }
+def job = j.createProject(WorkflowJob.class, name)
+job.setDisplayName("TerraFusion CI/CD Pipeline")
+def rc = new UserRemoteConfig("/opt/terrafusion", null, null, null)
+def bs = new BranchSpec("*/main")
+def scm = new GitSCM([rc], [bs], false, [], null, null, null)
+job.setDefinition(new CpsScmFlowDefinition(scm, "Jenkinsfile"))
+job.save()
+j.save()
+println("Pipeline job created: " + name)' > /dev/null 2>&1 && \
+echo "[✓] Pipeline job created" || echo "[WARN] Pipeline creation failed — may need manual setup"
+
+# ── 7. Install plugins + trigger ──
+echo "[7/7] Installing plugins & triggering build..."
 
 echo "[*] Installing default plugins..."
 PLUGINS="ant build-timeout credentials-binding docker-workflow email-ext git github-branch-source jackson2-api mailer matrix-auth pipeline-build-step pipeline-graph-analysis pipeline-input-step pipeline-milestone-step pipeline-stage-view plain-credentials ssh-slaves timestamper ws-cleanup workflow-aggregator"

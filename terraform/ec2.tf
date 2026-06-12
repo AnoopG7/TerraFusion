@@ -33,7 +33,7 @@ resource "aws_vpc_security_group_ingress_rule" "http" {
   from_port         = 80
   to_port           = 80
   ip_protocol       = "tcp"
-  description       = "HTTP — Frontend"
+  description       = "HTTP - Frontend"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "https" {

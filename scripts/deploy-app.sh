@@ -31,10 +31,10 @@ docker build -t terrafusion-frontend:"$TIMESTAMP" ./frontend
 docker tag terrafusion-frontend:"$TIMESTAMP" terrafusion-frontend:latest
 
 log "[*] Importing images into containerd..."
-docker save terrafusion-backend:"$TIMESTAMP" terrafusion-frontend:"$TIMESTAMP" | k3s ctr images import - || {
+docker save terrafusion-backend:"$TIMESTAMP" terrafusion-frontend:"$TIMESTAMP" | sudo k3s ctr images import - || {
   log "[!] Image import failed — retrying with Docker -> containerd sync"
-  docker save terrafusion-backend:"$TIMESTAMP" | k3s ctr images import -
-  docker save terrafusion-frontend:"$TIMESTAMP" | k3s ctr images import -
+  docker save terrafusion-backend:"$TIMESTAMP" | sudo k3s ctr images import -
+  docker save terrafusion-frontend:"$TIMESTAMP" | sudo k3s ctr images import -
 }
 
 log "[*] Deploying to k3s..."

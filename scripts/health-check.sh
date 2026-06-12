@@ -17,20 +17,12 @@ echo "=== TerraFusion Health Check @ $(now) ==="
 FAILED=0
 
 echo "  1. API HEALTH"
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-BACKEND_POD=$(kubectl get pod -n terrafusion -l app=backend -o name 2>/dev/null | head -1)
-if [ -n "$BACKEND_POD" ]; then
-  HTTP_CODE=$(kubectl exec -n terrafusion "$BACKEND_POD" -- curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://localhost:3001/api/health 2>/dev/null || echo "000")
-  if [[ "$HTTP_CODE" == "200" ]]; then
-    echo "   [✓] API is healthy (HTTP $HTTP_CODE)"
-  else
-    echo "   [✗] API returned HTTP $HTTP_CODE"
-    alert "CRITICAL" "API health check failed: HTTP $HTTP_CODE"
-    FAILED=$((FAILED + 1))
-  fi
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://localhost:30080/api/health 2>/dev/null || echo "000")
+if [[ "$HTTP_CODE" == "200" ]]; then
+  echo "   [✓] API is healthy (HTTP $HTTP_CODE)"
 else
-  echo "   [✗] No backend pod found"
-  alert "CRITICAL" "No backend pod found for health check"
+  echo "   [✗] API returned HTTP $HTTP_CODE"
+  alert "CRITICAL" "API health check failed: HTTP $HTTP_CODE"
   FAILED=$((FAILED + 1))
 fi
 
@@ -54,16 +46,13 @@ if command -v kubectl &>/dev/null; then
 fi
 
 echo "  3. APPLICATION RESPONSE VALIDITY"
-BACKEND_POD=$(kubectl get pod -n terrafusion -l app=backend -o name 2>/dev/null | head -1)
-if [ -n "$BACKEND_POD" ] && command -v kubectl &>/dev/null; then
-  RESPONSE=$(kubectl exec -n terrafusion "$BACKEND_POD" -- curl -s --max-time 5 http://localhost:3001/api/health 2>/dev/null || echo '{"status":"error"}')
-  STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unknown")
-  if [[ "$STATUS" == "ok" ]]; then
-    echo "   [✓] Backend API response valid"
-  else
-    echo "   [✗] Backend API returned unexpected status: $STATUS"
-    FAILED=$((FAILED + 1))
-  fi
+RESPONSE=$(curl -s --max-time 5 http://localhost:30080/api/health 2>/dev/null || echo '{"status":"error"}')
+STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unknown")
+if [[ "$STATUS" == "ok" ]]; then
+  echo "   [✓] Backend API response valid"
+else
+  echo "   [✗] Backend API returned unexpected status: $STATUS"
+  FAILED=$((FAILED + 1))
 fi
 
 echo "  4. k3s KUBERNETES"
@@ -73,15 +62,57 @@ if command -v kubectl &>/dev/null; then
   kubectl get pods -n terrafusion 2>/dev/null | grep -q Running && echo "   [✓] App pods running" || { echo "   [✗] App pods not running"; }
 fi
 
-echo "  5. DISK USAGE"
-df -h / | tail -1 | awk '{print "   Root: " $5 " used (" $3 "/" $2 ")"}'
-df -h / | tail -1 | awk '{gsub(/%/, "", $5); if ($5+0 > '"$DISK_WARN_PCT"') exit 1}' || {
-  echo "   [✗] Disk exceeds ${DISK_WARN_PCT}%!"
-  alert "WARNING" "Disk usage above ${DISK_WARN_PCT}%"
-  FAILED=$((FAILED + 1))
-}
+echo "  5. INFRASTRUCTURE SERVICES"
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+if command -v kubectl &>/dev/null; then
+  ES_PODS=$(kubectl get pods -n logging -l app=elasticsearch-master --field-selector=status.phase=Running 2>/dev/null | grep -c "elasticsearch-master" || true)
+  if [[ "$ES_PODS" -gt 0 ]]; then
+    echo "   [✓] Elasticsearch running"
+  else
+    echo "   [✗] Elasticsearch NOT running"
+    FAILED=$((FAILED + 1))
+  fi
+  KIBANA_PODS=$(kubectl get pods -n logging -l app=kibana --field-selector=status.phase=Running 2>/dev/null | grep -c "kibana" || true)
+  if [[ "$KIBANA_PODS" -gt 0 ]]; then
+    echo "   [✓] Kibana running"
+  else
+    echo "   [✗] Kibana NOT running"
+    FAILED=$((FAILED + 1))
+  fi
+  KIBANA_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:30560/ 2>/dev/null || echo "000")
+  if [[ "$KIBANA_CODE" == "302" ]]; then
+    echo "   [✓] Kibana accessible (HTTP $KIBANA_CODE)"
+  else
+    echo "   [✗] Kibana unreachable (HTTP $KIBANA_CODE)"
+    FAILED=$((FAILED + 1))
+  fi
+  GRAFANA_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:30300/ 2>/dev/null || echo "000")
+  if [[ "$GRAFANA_CODE" == "200" ]] || [[ "$GRAFANA_CODE" == "302" ]]; then
+    echo "   [✓] Grafana accessible (HTTP $GRAFANA_CODE)"
+  else
+    echo "   [✗] Grafana unreachable (HTTP $GRAFANA_CODE)"
+    FAILED=$((FAILED + 1))
+  fi
+  VAULT_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:30820/ 2>/dev/null || echo "000")
+  if [[ "$VAULT_CODE" == "200" ]] || [[ "$VAULT_CODE" == "307" ]]; then
+    echo "   [✓] Vault accessible (HTTP $VAULT_CODE)"
+  else
+    echo "   [✗] Vault unreachable (HTTP $VAULT_CODE)"
+    FAILED=$((FAILED + 1))
+  fi
+fi
 
-echo "  6. MEMORY USAGE"
+echo "  6. DISK USAGE"
+DF_OUTPUT=$(df -h / | tail -1)
+DISK_PCT=$(echo "$DF_OUTPUT" | awk '{gsub(/%/,"",$5); print $5}')
+echo "   Root: ${DISK_PCT}% used ($(echo "$DF_OUTPUT" | awk '{print $3}')/$(echo "$DF_OUTPUT" | awk '{print $2}'))"
+if [[ "$DISK_PCT" -gt "$DISK_WARN_PCT" ]]; then
+  echo "   [✗] Disk exceeds ${DISK_WARN_PCT}%! (${DISK_PCT}%)"
+  alert "WARNING" "Disk usage above ${DISK_WARN_PCT}%: ${DISK_PCT}%"
+  FAILED=$((FAILED + 1))
+fi
+
+echo "  7. MEMORY USAGE"
 if command -v free &>/dev/null; then
   MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
   MEM_USED=$(free -m | awk '/^Mem:/{print $3}')
@@ -92,14 +123,9 @@ if command -v free &>/dev/null; then
     alert "WARNING" "Memory at ${MEM_PCT}%"
     FAILED=$((FAILED + 1))
   fi
-
-  SWAP_USED=$(free -m | awk '/^Swap:/{print $3}')
-  if [[ "${SWAP_USED:-0}" -gt 0 ]]; then
-    echo "   Swap: ${SWAP_USED}MB used"
-  fi
 fi
 
-echo "  7. RDS CONNECTIVITY"
+echo "  8. RDS CONNECTIVITY"
 if [[ -f /opt/terrafusion/backend/.env ]]; then
   source /opt/terrafusion/backend/.env
   if [[ "${DB_TYPE:-sqlite}" == "mysql" ]]; then

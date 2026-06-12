@@ -23,9 +23,9 @@ volumeClaimTemplate:
 
 esJavaOpts: "-Xmx512m -Xms512m"
 
-config:
-  discovery.type: single-node
-  xpack.security.enabled: "false"
+esConfig:
+  elasticsearch.yml: |
+    discovery.type: single-node
 
 networkPolicy:
   enabled: false

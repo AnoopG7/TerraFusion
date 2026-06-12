@@ -5,17 +5,26 @@ imageTag: "8.11.0"
 
 resources:
   requests:
-    cpu: "100m"
-    memory: "256Mi"
-  limits:
-    cpu: "300m"
+    cpu: "200m"
     memory: "512Mi"
+  limits:
+    cpu: "500m"
+    memory: "1Gi"
 
 service:
   type: NodePort
   nodePort: 30560
 
-elasticsearchHosts: "http://elasticsearch-master.logging.svc:9200"
+elasticsearchHosts: "https://elasticsearch-master.logging.svc:9200"
 
-config:
-  server.publicBaseUrl: ""
+extraEnvs:
+  - name: NODE_OPTIONS
+    value: "--max-old-space-size=1800"
+
+kibanaConfig:
+  kibana.yml: |
+    elasticsearch.hosts: ["https://elasticsearch-master.logging.svc:9200"]
+    server.host: "0.0.0.0"
+    server.shutdownTimeout: "5s"
+    monitoring.ui.container.elasticsearch.enabled: true
+    elasticsearch.ssl.certificateAuthorities: /usr/share/kibana/config/certs/ca.crt
