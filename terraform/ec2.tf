@@ -109,3 +109,36 @@ resource "aws_eip" "main" {
   instance = aws_instance.main.id
   tags     = { Name = "${var.project_name}-eip" }
 }
+
+# After EC2 + RDS are both created, push real RDS values into the EC2's
+# k8s ConfigMap and .env file. This is needed because user_data runs
+# before RDS is available (parallel provisioning) and uses placeholders.
+resource "null_resource" "rds_config" {
+  depends_on = [aws_instance.main, aws_db_instance.mysql, aws_eip.main]
+
+  provisioner "local-exec" {
+    command = <<-EOCMD
+      for i in $$(seq 1 30); do
+        ssh -o StrictHostKeyChecking=no -i ~/${var.key_pair_name}.pem ubuntu@${aws_eip.main.public_ip} \
+          'kubectl get node >/dev/null 2>&1' 2>/dev/null && break
+        sleep 10
+      done
+      ssh -o StrictHostKeyChecking=no -i ~/${var.key_pair_name}.pem ubuntu@${aws_eip.main.public_ip} \
+        'kubectl create configmap backend-config -n terrafusion \
+          --from-literal=DB_HOST=${aws_db_instance.mysql.address} \
+          --from-literal=DB_PORT=${aws_db_instance.mysql.port} \
+          --from-literal=DB_NAME=${aws_db_instance.mysql.db_name} \
+          --from-literal=DB_USER=${aws_db_instance.mysql.username} \
+          --from-literal=DB_TYPE=mysql \
+          --from-literal=NODE_ENV=production \
+          --dry-run=client -o yaml | kubectl apply -f - && \
+         kubectl create secret generic backend-secret -n terrafusion \
+          --from-literal=DB_PASSWORD=${var.rds_master_password} \
+          --from-literal=JWT_SECRET=terrafusion-38cc941eeb6cad3f21ac7f9508f489c0 \
+          --dry-run=client -o yaml | kubectl apply -f - && \
+         kubectl delete pod -n terrafusion -l app=backend && \
+         sudo sed -i "s|__REPLACE_ME__|${aws_db_instance.mysql.address}|g" /opt/terrafusion/backend/.env && \
+         sudo sed -i "s|__RDS_PASSWORD__|${var.rds_master_password}|g" /opt/terrafusion/backend/.env'
+    EOCMD
+  }
+}
