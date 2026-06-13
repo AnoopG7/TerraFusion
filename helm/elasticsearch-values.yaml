@@ -1,46 +1,32 @@
-# Elasticsearch — Helm values
-# Install: helm repo add elastic https://helm.elastic.co
-# Install: helm upgrade --install elasticsearch elastic/elasticsearch -n logging --create-namespace -f elasticsearch-values.yaml
+# Elasticsearch — Helm values (bitnami/elasticsearch)
+# Install: helm repo add bitnami https://charts.bitnami.com/bitnami
+# Install: helm upgrade --install elasticsearch bitnami/elasticsearch -n logging -f elasticsearch-values.yaml
 
-replicas: 1
-minimumMasterNodes: 1
+global:
+  kibanaEnabled: false
 
-imageTag: "8.5.1"
+master:
+  replicaCount: 1
 
-# HTTP protocol since security is disabled (fixes readiness/liveness probe scheme)
-protocol: http
+data:
+  replicaCount: 0
 
-resources:
-  requests:
-    cpu: "100m"
-    memory: "512Mi"
-  limits:
-    cpu: "500m"
-    memory: "1Gi"
+coordinating:
+  replicaCount: 0
 
-volumeClaimTemplate:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 5Gi
+ingest:
+  replicaCount: 0
 
-esJavaOpts: "-Xmx512m -Xms512m"
-
-networkPolicy:
-  enabled: false
-
-# Don't create ES credentials secret (security is disabled, avoids Helm ownership conflicts)
 secret:
+  enabled: true
+
+security:
   enabled: false
 
-# Don't mount any TLS cert secrets (we disable security)
-secretMounts: []
+sysctlImage:
+  enabled: false
 
-# Disable security for single-node demo
-# NOTE: Do NOT set discovery.type: single-node here — it conflicts with
-# the chart's auto-generated cluster.initial_master_nodes setting
-esConfig:
-  elasticsearch.yml: |
-    xpack.security.enabled: false
-    xpack.security.transport.ssl.enabled: false
-    xpack.security.http.ssl.enabled: false
+image:
+  tag: 8.5.1
+
+resourcesPreset: none

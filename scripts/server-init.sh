@@ -188,6 +188,7 @@ bash scripts/setup-jenkins.sh || echo "  [WARN] Jenkins setup had issues — che
 echo "[*] Installing Helm charts (Prometheus/Grafana, ELK, Vault)..."
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
 helm repo add elastic https://helm.elastic.co || true
+helm repo add bitnami https://charts.bitnami.com/bitnami || true
 helm repo add hashicorp https://helm.releases.hashicorp.com || true
 helm repo update || true
 
@@ -199,16 +200,24 @@ kubectl create namespace logging || true
 
 # ES needs longer than 5m on single-node EC2 — install without --wait, then poll
 kubectl delete secret elasticsearch-master-credentials -n logging --ignore-not-found 
-helm upgrade --install elasticsearch elastic/elasticsearch \
+helm upgrade --install elasticsearch bitnami/elasticsearch \
   -n logging --create-namespace -f helm/elasticsearch-values.yaml \
-  --version 8.5.1 --timeout 10m  && \
+  --set global.kibanaEnabled=false \
+  --set master.replicaCount=1 \
+  --set data.replicaCount=0 \
+  --set coordinating.replicaCount=0 \
+  --set ingest.replicaCount=0 \
+  --set secret.enabled=true \
+  --set security.enabled=false \
+  --set sysctlImage.enabled=false \
+  --set image.tag=8.5.1 --timeout 10m  && \
   echo "  [✓] Elasticsearch chart submitted" || \
   echo "  [WARN] Elasticsearch install failed — run manually later"
 
 echo "[*] Waiting for Elasticsearch to be ready (up to 10 min)..."
 ES_READY=false
 for i in $(seq 1 60); do
-  STATUS=$(kubectl get pod -n logging -l app=elasticsearch-master -o jsonpath='{.items[0].status.phase}' || echo "")
+  STATUS=$(kubectl get pod -n logging -l app.kubernetes.io/component=master -o jsonpath='{.items[0].status.phase}' || echo "")
   if [ "$STATUS" = "Running" ]; then
     ES_READY=true
     echo "  [✓] Elasticsearch ready"

@@ -171,10 +171,7 @@ pipeline {
     stages {
         stage("Checkout") {
             steps {
-                checkout scmGit(
-                    branches: [[name: "\${params.BRANCH}"]],
-                    userRemoteConfigs: [[url: "https://github.com/AnoopG7/TerraFusion.git"]]
-                )
+                git branch: params.BRANCH, url: "https://github.com/AnoopG7/TerraFusion.git"
             }
         }
         stage("Install Dependencies") {
