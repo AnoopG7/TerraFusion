@@ -5,7 +5,7 @@
 replicas: 1
 minimumMasterNodes: 1
 
-imageTag: "8.11.0"
+imageTag: "8.5.1"
 
 resources:
   requests:
@@ -22,10 +22,6 @@ volumeClaimTemplate:
       storage: 5Gi
 
 esJavaOpts: "-Xmx512m -Xms512m"
-
-esConfig:
-  elasticsearch.yml: |
-    discovery.type: single-node
 
 networkPolicy:
   enabled: false

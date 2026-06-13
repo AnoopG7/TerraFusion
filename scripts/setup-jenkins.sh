@@ -32,21 +32,27 @@ mkdir -p /etc/apt/keyrings
 wget -q -O /etc/apt/keyrings/jenkins-keyring.asc https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
 echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" > /etc/apt/sources.list.d/jenkins.list
 apt update -y 2>/dev/null || true
+
+# Create systemd override BEFORE installing Jenkins (prevents setup wizard on first boot)
+mkdir -p /etc/systemd/system/jenkins.service.d
+cat > /etc/systemd/system/jenkins.service.d/override.conf << 'EOF'
+[Service]
+Environment="JAVA_OPTS=-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Xmx256m -Xms128m -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true"
+EOF
+systemctl daemon-reload
+
 apt install -y jenkins
 systemctl enable jenkins
 echo "[✓] Jenkins installed: $(dpkg -l jenkins 2>/dev/null | awk '/^ii/ {print $3}')"
 
-# ── 3. Configure Jenkins (systemd memory + init.groovy.d) ──
+# ── 3. Configure Jenkins (docker group + init.groovy.d) ──
 echo "[3/6] Configuring Jenkins..."
-mkdir -p /etc/systemd/system/jenkins.service.d
-cat > /etc/systemd/system/jenkins.service.d/override.conf << 'EOF'
-[Service]
-Environment="JAVA_OPTS=-Xmx256m -Xms128m -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true"
-EOF
-systemctl daemon-reload
-
 # Add jenkins to docker group
 usermod -aG docker jenkins 2>/dev/null || true
+
+# Allow jenkins to run k3s without password (for docker save | sudo k3s ctr images import)
+echo "jenkins ALL=(ALL) NOPASSWD: /usr/local/bin/k3s" > /etc/sudoers.d/jenkins-k3s 2>/dev/null
+chmod 440 /etc/sudoers.d/jenkins-k3s 2>/dev/null
 
 # init.groovy.d — idempotent admin user + Jenkins URL
 JENKINS_HOME="/var/lib/jenkins"

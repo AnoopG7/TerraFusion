@@ -1,7 +1,7 @@
 # Kibana — Helm values
 # Install: helm upgrade --install kibana elastic/kibana -n logging -f kibana-values.yaml
 
-imageTag: "8.11.0"
+imageTag: "8.5.1"
 
 resources:
   requests:
@@ -17,9 +17,13 @@ service:
 
 elasticsearchHosts: "https://elasticsearch-master.logging.svc:9200"
 
+elasticsearchCertificateSecret: elasticsearch-master-certs
+
 extraEnvs:
   - name: NODE_OPTIONS
     value: "--max-old-space-size=1800"
+  - name: NODE_TLS_REJECT_UNAUTHORIZED
+    value: "0"
 
 kibanaConfig:
   kibana.yml: |

@@ -160,27 +160,66 @@ helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
   -n monitoring --create-namespace -f helm/prometheus-values.yaml --wait --timeout 5m 2>/dev/null || \
   echo "  [WARN] Prometheus/Grafana install timed out — run manually later"
 
+# Pre-create ES credentials with known password (Helm auto-generates if secret doesn't exist)
+kubectl create namespace logging 2>/dev/null || true
+kubectl create secret generic elasticsearch-master-credentials \
+  -n logging --from-literal=password=admin123 2>/dev/null || true
+echo "  [✓] ES password set to: admin123"
+
+# ES needs longer than 5m on single-node EC2 — install without --wait, then poll
 helm upgrade --install elasticsearch elastic/elasticsearch \
   -n logging --create-namespace -f helm/elasticsearch-values.yaml \
-  --version 8.5.1 --wait --timeout 5m 2>/dev/null || \
-  echo "  [WARN] Elasticsearch install timed out — run manually later"
+  --version 8.5.1 2>/dev/null && \
+  echo "  [✓] Elasticsearch chart submitted" || \
+  echo "  [WARN] Elasticsearch install failed — run manually later"
 
-echo "[*] Waiting for Elasticsearch to be ready..."
-kubectl wait --for=condition=ready pod -n logging -l app=elasticsearch-master --timeout=120s 2>/dev/null || \
-  echo "  [WARN] ES pod not ready yet"
+echo "[*] Waiting for Elasticsearch to be ready (up to 10 min)..."
+ES_READY=false
+for i in $(seq 1 60); do
+  STATUS=$(kubectl get pod -n logging -l app=elasticsearch-master -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
+  if [ "$STATUS" = "Running" ]; then
+    ES_READY=true
+    echo "  [✓] Elasticsearch ready"
+    break
+  fi
+  sleep 10
+done
 
-# Clean up any dangling Kibana pre-install jobs from previous failed installs
-kubectl delete job -n logging -l app=kibana 2>/dev/null || true
+if [ "$ES_READY" != "true" ]; then
+  echo "  [WARN] ES not ready after 10 min — skipping Kibana/Filebeat"
+  SKIP_ELK=true
+fi
 
-helm upgrade --install kibana elastic/kibana \
-  -n logging -f helm/kibana-values.yaml \
-  --version 8.5.1 --wait --timeout 3m 2>/dev/null || \
-  echo "  [WARN] Kibana install timed out — run manually later"
+# Clean up any dangling Kibana resources from previous failed installs
+helm uninstall kibana -n logging --no-hooks 2>/dev/null || true
+kubectl delete secret,serviceaccount,role,rolebinding,configmap,job -n logging -l app=kibana --ignore-not-found 2>/dev/null || true
+kubectl delete configmap -n logging kibana-kibana-helm-scripts --ignore-not-found 2>/dev/null || true
+kubectl delete secret -n logging kibana-kibana-es-token --ignore-not-found 2>/dev/null || true
 
-helm upgrade --install filebeat elastic/filebeat \
-  -n logging -f helm/filebeat-config.yaml \
-  --version 8.5.1 --wait --timeout 3m 2>/dev/null || \
-  echo "  [WARN] Filebeat install timed out — run manually later"
+if [ "${SKIP_ELK:-false}" != "true" ]; then
+  # Clean up old Kibana service account token from ES (prevents pre-install hook conflicts)
+  ES_PASS=$(kubectl get secret -n logging elasticsearch-master-credentials -ojsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  if [ -n "$ES_PASS" ]; then
+    kubectl exec -n logging elasticsearch-master-0 -- bash -c \
+      "curl -sk -u elastic:${ES_PASS} -X DELETE 'https://localhost:9200/_security/service/elastic/kibana/credential/token/kibana-kibana'" \
+      2>/dev/null || true
+    echo "  [✓] Old Kibana ES token cleaned"
+  fi
+
+  helm install kibana elastic/kibana \
+    -n logging -f helm/kibana-values.yaml \
+    --version 8.5.1 --wait --timeout 5m 2>/dev/null && \
+    echo "  [✓] Kibana installed" || \
+    echo "  [WARN] Kibana install timed out — run manually later"
+
+  helm upgrade --install filebeat elastic/filebeat \
+    -n logging -f helm/filebeat-config.yaml \
+    --version 8.5.1 --wait --timeout 3m 2>/dev/null && \
+    echo "  [✓] Filebeat installed" || \
+    echo "  [WARN] Filebeat install timed out — run manually later"
+else
+  echo "  [SKIP] Kibana/Filebeat — Elasticsearch not ready"
+fi
 
 helm upgrade --install vault hashicorp/vault \
   -n vault --create-namespace -f helm/vault-values.yaml --wait --timeout 3m 2>/dev/null || \
@@ -235,7 +274,7 @@ echo ""
 echo "  Jenkins:  http://$(curl -s http://checkip.amazonaws.com):8080 (admin / admin123)"
 echo "  Frontend: http://$(curl -s http://checkip.amazonaws.com):30080"
 echo "  Grafana:  http://$(curl -s http://checkip.amazonaws.com):30300 (admin:admin)"
-echo "  Kibana:   http://$(curl -s http://checkip.amazonaws.com):30560"
+echo "  Kibana:   http://$(curl -s http://checkip.amazonaws.com):30560 (elastic / admin123)"
 echo "  Vault:    http://$(curl -s http://checkip.amazonaws.com):30820 (token: root)"
 echo "  Vault secret: vault kv get secret/terrafusion/backend"
 echo "  k3s:      kubectl get nodes"

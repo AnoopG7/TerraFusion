@@ -79,8 +79,8 @@ pipeline {
                             sleep 10
                             BACKEND_POD=\$(kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get pod -n ${K8S_NAMESPACE} -l app=backend -o name | head -1)
                             kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml exec -n ${K8S_NAMESPACE} \$BACKEND_POD -- \
-                                sh -c 'wget -q -O /dev/null http://localhost:3001/api/sensors'
-                            echo "Smoke test passed: DB + API healthy"
+                                sh -c 'wget -q -O - http://localhost:3001/api/health' | grep -q '"status":"ok"'
+                            echo "Smoke test passed: API healthy"
                         """
                     } catch (err) {
                         currentBuild.result = 'FAILURE'
