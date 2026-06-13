@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 GIT_REPO="https://github.com/AnoopG7/TerraFusion.git"
 DEPLOY_DIR="/opt/terrafusion"
@@ -30,7 +30,7 @@ echo ""
 echo "────────────────────────────────────────────"
 echo "  [2/7] Installing Dependencies"
 echo "────────────────────────────────────────────"
-apt install -y git curl wget sqlite3 ufw htop tree unzip jq vim default-mysql-client
+apt install -y git curl wget sqlite3 ufw htop tree unzip jq vim mysql-client
 
 echo "[*] Installing Node.js 22.x (for Jenkins pipeline)..."
 if ! command -v node &>/dev/null || [[ "$(node --version)" != v22* ]]; then
@@ -79,7 +79,7 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 chmod 644 /etc/rancher/k3s/k3s.yaml
 mkdir -p /var/lib/jenkins/.kube
 cp /etc/rancher/k3s/k3s.yaml /var/lib/jenkins/.kube/config
-chown -R jenkins:jenkins /var/lib/jenkins/.kube 2>/dev/null || true
+chown -R jenkins:jenkins /var/lib/jenkins/.kube || true
 echo "k3s $(k3s --version | head -1)"
 
 if ! command -v helm &>/dev/null; then
@@ -155,7 +155,7 @@ chmod -R 755 .
 chmod 600 backend/.env
 
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-kubectl create namespace terrafusion 2>/dev/null || true
+kubectl create namespace terrafusion || true
 
 # Create k8s Secret and ConfigMap with real values from .env (not placeholders)
 source backend/.env
@@ -175,7 +175,7 @@ kubectl create secret generic backend-secret -n terrafusion \
   --from-literal=JWT_SECRET="${JWT_SECRET}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl apply -f /opt/terrafusion/k8s/ 2>/dev/null || echo "[WARN] k8s manifests not yet present"
+kubectl apply -f /opt/terrafusion/k8s/ || echo "[WARN] k8s manifests not yet present"
 
 echo "[*] Installing metrics-server..."
 if ! kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml; then
@@ -186,35 +186,29 @@ echo "[*] Setting up native Jenkins..."
 bash scripts/setup-jenkins.sh || echo "  [WARN] Jenkins setup had issues — check /var/log/jenkins-setup.log"
 
 echo "[*] Installing Helm charts (Prometheus/Grafana, ELK, Vault)..."
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
-helm repo add elastic https://helm.elastic.co 2>/dev/null || true
-helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
-helm repo update 2>/dev/null || true
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
+helm repo add elastic https://helm.elastic.co || true
+helm repo add hashicorp https://helm.releases.hashicorp.com || true
+helm repo update || true
 
 helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
-  -n monitoring --create-namespace -f helm/prometheus-values.yaml --wait --timeout 5m 2>/dev/null || \
+  -n monitoring --create-namespace -f helm/prometheus-values.yaml --wait --timeout 5m || \
   echo "  [WARN] Prometheus/Grafana install timed out — run manually later"
 
-# Pre-create logging namespace and ES credentials secret
-# (Kibana hook jobs reference this secret even when ES security is disabled)
-kubectl create namespace logging 2>/dev/null || true
-kubectl create secret generic elasticsearch-master-credentials \
-  -n logging \
-  --from-literal=username=elastic \
-  --from-literal=password=admin123 \
-  2>/dev/null || true
+kubectl create namespace logging || true
 
 # ES needs longer than 5m on single-node EC2 — install without --wait, then poll
+kubectl delete secret elasticsearch-master-credentials -n logging --ignore-not-found 
 helm upgrade --install elasticsearch elastic/elasticsearch \
   -n logging --create-namespace -f helm/elasticsearch-values.yaml \
-  --version 8.5.1 --timeout 10m 2>/dev/null && \
+  --version 8.5.1 --timeout 10m  && \
   echo "  [✓] Elasticsearch chart submitted" || \
   echo "  [WARN] Elasticsearch install failed — run manually later"
 
 echo "[*] Waiting for Elasticsearch to be ready (up to 10 min)..."
 ES_READY=false
 for i in $(seq 1 60); do
-  STATUS=$(kubectl get pod -n logging -l app=elasticsearch-master -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
+  STATUS=$(kubectl get pod -n logging -l app=elasticsearch-master -o jsonpath='{.items[0].status.phase}' || echo "")
   if [ "$STATUS" = "Running" ]; then
     ES_READY=true
     echo "  [✓] Elasticsearch ready"
@@ -223,57 +217,38 @@ for i in $(seq 1 60); do
   sleep 10
 done
 
-if [ "$ES_READY" != "true" ]; then
-  echo "  [WARN] ES not ready after 10 min — skipping Kibana/Filebeat"
-  SKIP_ELK=true
-fi
-
-# Clean up any dangling Kibana resources from previous failed installs
-helm uninstall kibana -n logging --no-hooks 2>/dev/null || true
-kubectl delete secret,serviceaccount,role,rolebinding,configmap,job -n logging -l app=kibana --ignore-not-found 2>/dev/null || true
-kubectl delete configmap -n logging kibana-kibana-helm-scripts --ignore-not-found 2>/dev/null || true
-kubectl delete secret -n logging kibana-kibana-es-token --ignore-not-found 2>/dev/null || true
-
-if [ "${SKIP_ELK:-false}" != "true" ]; then
-  # Use --no-hooks to skip the pre-install Job that tries to create
-  # ES service account tokens (fails when xpack.security is disabled)
-  helm upgrade --install kibana elastic/kibana \
-    -n logging -f helm/kibana-values.yaml \
-    --version 8.5.1 --no-hooks --wait --timeout 8m 2>/dev/null && \
-    echo "  [✓] Kibana installed" || \
-    echo "  [WARN] Kibana install timed out — run manually later"
-
+# Filebeat — log shipping to ES (no auth since xpack.security is disabled)
+if [ "$ES_READY" = "true" ]; then
   helm upgrade --install filebeat elastic/filebeat \
     -n logging -f helm/filebeat-config.yaml \
-    --version 8.5.1 --wait --timeout 3m 2>/dev/null && \
+    --version 8.5.1 --wait --timeout 3m  && \
     echo "  [✓] Filebeat installed" || \
     echo "  [WARN] Filebeat install timed out — run manually later"
-else
-  echo "  [SKIP] Kibana/Filebeat — Elasticsearch not ready"
 fi
 
 helm upgrade --install vault hashicorp/vault \
-  -n vault --create-namespace -f helm/vault-values.yaml --wait --timeout 3m 2>/dev/null || \
+  -n vault --create-namespace -f helm/vault-values.yaml --wait --timeout 3m || \
   echo "  [WARN] Vault install timed out — run manually later"
 
 echo "[*] Configuring Vault secrets..."
 for i in $(seq 1 30); do
-  VAULT_POD=$(kubectl get pod -n vault -l app.kubernetes.io/name=vault -o name 2>/dev/null | head -1)
+  VAULT_POD=$(kubectl get pod -n vault -l app.kubernetes.io/name=vault -o name  | head -1)
   if [ -n "$VAULT_POD" ]; then break; fi
   sleep 5
 done
 if [ -n "$VAULT_POD" ]; then
   # Wait for Vault pod to be fully ready
-  kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=vault -n vault --timeout=120s 2>/dev/null || true
+  kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=vault -n vault --timeout=120s || true
   sleep 5
   kubectl exec -n vault "$VAULT_POD" -- sh -c "
     export VAULT_ADDR=http://127.0.0.1:8200
+    export VAULT_TOKEN=root
     vault kv put secret/terrafusion/backend \
       DB_PASSWORD='${DB_PASSWORD}' \
       JWT_SECRET='${JWT_SECRET}' \
       DB_HOST='${DB_HOST}' \
       DB_NAME='${RDS_DB_NAME:-terrafusion}'
-  " 2>/dev/null && \
+  "  && \
     echo "  [✓] Backend secrets stored in Vault" || \
     echo "  [WARN] Vault secret store failed — may need manual setup"
 else
@@ -295,9 +270,9 @@ kubectl get nodes || echo "k3s not ready yet"
 
 echo ""
 echo "--- API Health ---"
-BACKEND_POD=$(kubectl get pod -n terrafusion -l app=backend -o name 2>/dev/null | head -1)
+BACKEND_POD=$(kubectl get pod -n terrafusion -l app=backend -o name  | head -1)
 if [ -n "$BACKEND_POD" ]; then
-  kubectl exec -n terrafusion "$BACKEND_POD" -- wget -q -O - --timeout=5 http://localhost:3001/api/health 2>/dev/null || echo "Health check pending"
+  kubectl exec -n terrafusion "$BACKEND_POD" -- wget -q -O - --timeout=5 http://localhost:3001/api/health || echo "Health check pending"
 else
   echo "Backend pod not ready yet"
 fi
@@ -311,7 +286,7 @@ echo ""
 echo "  Jenkins:  http://$(curl -s http://checkip.amazonaws.com):8080 (admin / admin123)"
 echo "  Frontend: http://$(curl -s http://checkip.amazonaws.com):30080"
 echo "  Grafana:  http://$(curl -s http://checkip.amazonaws.com):30300 (admin:admin)"
-echo "  Kibana:   http://$(curl -s http://checkip.amazonaws.com):30560 (no auth)"
+echo   "  Elasticsearch: http://$(curl -s http://checkip.amazonaws.com):30920"
 echo "  Vault:    http://$(curl -s http://checkip.amazonaws.com):30820 (token: root)"
 echo "  Vault secret: vault kv get secret/terrafusion/backend"
 echo "  k3s:      kubectl get nodes"

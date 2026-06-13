@@ -78,9 +78,9 @@ output "grafana_url" {
   value       = "http://${aws_instance.main.public_ip}:30300"
 }
 
-output "kibana_url" {
-  description = "Kibana logging URL"
-  value       = "http://${aws_instance.main.public_ip}:30560"
+output "elasticsearch_url" {
+  description = "Elasticsearch URL (HTTP, no auth)"
+  value       = "http://${aws_instance.main.public_ip}:30920"
 }
 
 output "vault_url" {
