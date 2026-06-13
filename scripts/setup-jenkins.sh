@@ -3,14 +3,15 @@ set -euo pipefail
 
 JENKINS_URL="http://localhost:8080"
 PUBLIC_IP=$(curl -s http://checkip.amazonaws.com 2>/dev/null || echo "localhost")
-TERRAFORM_DIR="/opt/terrafusion"
+JENKINS_HOME="/var/lib/jenkins"
+PLUGIN_LIST="workflow-aggregator git docker-workflow pipeline-stage-view build-timeout credentials-binding email-ext github-branch-source mailer matrix-auth pipeline-build-step plain-credentials ssh-slaves timestamper ws-cleanup blueocean"
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  TerraFusion — Native Jenkins Setup (Ubuntu 24.04)"
 echo "═══════════════════════════════════════════════════════════════"
 
 # ── 1. Install Java 21 ──
-echo "[1/7] Installing Java 21..."
+echo "[1/8] Installing Java 21..."
 apt install -y openjdk-21-jdk 2>/dev/null || {
   echo "[!] apt failed, trying manual install..."
   curl -fsSL https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.deb -o /tmp/jdk21.deb
@@ -19,9 +20,8 @@ apt install -y openjdk-21-jdk 2>/dev/null || {
 echo "[✓] Java: $(java --version | head -1)"
 
 # ── 2. Install Jenkins from official apt repo ──
-echo "[2/7] Installing Jenkins from apt repo..."
+echo "[2/8] Installing Jenkins from apt repo..."
 
-# Remove any previous sources/keys
 rm -f /etc/apt/sources.list.d/jenkins.list
 rm -f /usr/share/keyrings/jenkins-keyring.asc /usr/share/keyrings/jenkins-keyring.gpg
 rm -f /etc/apt/keyrings/jenkins-keyring.asc
@@ -45,31 +45,22 @@ apt install -y jenkins
 systemctl enable jenkins
 echo "[✓] Jenkins installed: $(dpkg -l jenkins 2>/dev/null | awk '/^ii/ {print $3}')"
 
-# ── 3. Configure Jenkins (docker group + sudoers + init.groovy.d) ──
-echo "[3/7] Configuring Jenkins..."
-# Add jenkins to docker group
+# ── 3. Configure Jenkins ──
+echo "[3/8] Configuring Jenkins..."
 usermod -aG docker jenkins 2>/dev/null || true
 
-# Allow jenkins to run k3s and kubectl without password
 echo "jenkins ALL=(ALL) NOPASSWD: /usr/local/bin/k3s, /usr/local/bin/kubectl" > /etc/sudoers.d/jenkins-k3s 2>/dev/null
 chmod 440 /etc/sudoers.d/jenkins-k3s 2>/dev/null
 
-# Ensure jenkins can access k3s kubeconfig
 mkdir -p /var/lib/jenkins/.kube
 cp /etc/rancher/k3s/k3s.yaml /var/lib/jenkins/.kube/config 2>/dev/null || true
 chown -R jenkins:jenkins /var/lib/jenkins/.kube 2>/dev/null || true
 chmod 600 /var/lib/jenkins/.kube/config 2>/dev/null || true
 
-# init.groovy.d — idempotent admin user + Jenkins URL
-JENKINS_HOME="/var/lib/jenkins"
+# ── 4. Set up init.groovy.d ──
+echo "[4/8] Setting up init scripts..."
 INIT_DIR="${JENKINS_HOME}/init.groovy.d"
 mkdir -p "$INIT_DIR"
-
-# Wait for Jenkins home to be ready
-for i in $(seq 1 30); do
-  [ -d "$JENKINS_HOME" ] && break
-  sleep 2
-done
 
 cat > "${INIT_DIR}/01-admin-user.groovy" << 'GROOVY'
 import jenkins.model.*
@@ -106,9 +97,8 @@ sed -i "s|__PUBLIC_IP__|${PUBLIC_IP}|g" "${INIT_DIR}/02-jenkins-url.groovy"
 chown -R jenkins:jenkins "$INIT_DIR"
 echo "[✓] init.groovy.d scripts installed"
 
-# ── 4. Start Jenkins (first boot — no plugins yet) ──
-echo "[4/7] Starting Jenkins..."
-systemctl enable jenkins 2>/dev/null || true
+# ── 5. First boot: start Jenkins so init.groovy.d runs ──
+echo "[5/8] Starting Jenkins (first boot)..."
 systemctl restart jenkins || true
 
 echo "[*] Waiting for Jenkins to start..."
@@ -118,45 +108,64 @@ for i in $(seq 1 90); do
   sleep 3
 done
 echo "[✓] Jenkins ready (HTTP $STATUS)"
-echo "[*] Waiting for init.groovy.d scripts to execute..."
 sleep 15
+echo "[✓] init.groovy.d executed"
 
-PASS=$(cat /var/lib/jenkins/secrets/initialAdminPassword 2>/dev/null || echo "")
-echo "[✓] Initial admin password (before groovy override): $PASS"
+# ── 6. Install plugins using jenkins-cli.jar (most reliable method) ──
+echo "[6/8] Installing plugins via Jenkins CLI..."
 
-# ── 5. Install plugins FIRST (before creating pipeline job) ──
-echo "[5/7] Installing plugins..."
+# Download CLI from the running Jenkins instance
+curl -s -u admin:admin123 "$JENKINS_URL/jnlpJars/jenkins-cli.jar" -o /tmp/jenkins-cli.jar 2>/dev/null
 
-JENKINS_COOKIE=$(mktemp)
-CRUMB_JSON=$(curl -s -u "admin:admin123" -c "$JENKINS_COOKIE" "$JENKINS_URL/crumbIssuer/api/json")
-CRUMB=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumb'])" 2>/dev/null || echo "")
-CRUMB_HEADER=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumbRequestField'])" 2>/dev/null || echo "Jenkins-Crumb")
+if [ -f /tmp/jenkins-cli.jar ] && [ -s /tmp/jenkins-cli.jar ]; then
+  echo "[*] Installing plugins (this takes 2-5 minutes)..."
+  java -jar /tmp/jenkins-cli.jar -s "$JENKINS_URL" -webSocket -auth admin:admin123 \
+    install-plugin $PLUGIN_LIST 2>&1 | grep -E "Installing|already|done|Installed" || true
+  echo "[✓] Plugins installed via CLI"
+else
+  echo "[WARN] CLI jar download failed — trying Script Console fallback..."
+  
+  JENKINS_COOKIE=$(mktemp)
+  CRUMB_JSON=$(curl -s -u "admin:admin123" -c "$JENKINS_COOKIE" "$JENKINS_URL/crumbIssuer/api/json")
+  CRUMB=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumb'])" 2>/dev/null || echo "")
+  CRUMB_HEADER=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumbRequestField'])" 2>/dev/null || echo "Jenkins-Crumb")
 
-# Install all plugins in a single batch via Script Console (much faster + reliable)
-echo "[*] Installing default plugins + Blue Ocean (batch)..."
-PLUGIN_LIST="ant build-timeout credentials-binding docker-workflow email-ext git github-branch-source jackson2-api mailer matrix-auth pipeline-build-step pipeline-graph-analysis pipeline-input-step pipeline-milestone-step pipeline-stage-view plain-credentials ssh-slaves timestamper ws-cleanup workflow-aggregator blueocean"
+  # Install each plugin via installNecessaryPlugins REST API
+  for plugin in $PLUGIN_LIST; do
+    echo "  $plugin..."
+    curl -s -X POST -u "admin:admin123" -b "$JENKINS_COOKIE" \
+      -H "${CRUMB_HEADER}: ${CRUMB}" \
+      -H "Content-Type: text/xml" \
+      "$JENKINS_URL/pluginManager/installNecessaryPlugins" \
+      -d "<install plugin='$plugin@latest' />" 2>/dev/null || true
+  done
+  
+  # Wait for downloads to complete
+  echo "[*] Waiting for plugin downloads..."
+  for i in $(seq 1 60); do
+    PENDING=$(curl -s -u "admin:admin123" "$JENKINS_URL/updateCenter/api/json" 2>/dev/null | \
+      python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+jobs = [j for j in data.get('jobs', []) if j.get('type') == 'InstallationJob']
+pending = [j for j in jobs if j.get('status', {}).get('type') not in ('Success', 'Failure', 'Cancelled')]
+print(len(pending))
+" 2>/dev/null || echo "0")
+    if [ "$PENDING" = "0" ]; then
+      echo "  All plugins downloaded"
+      break
+    fi
+    echo "  Waiting... ($PENDING pending)"
+    sleep 5
+  done
+  rm -f "$JENKINS_COOKIE"
+  echo "[✓] Plugins installed via REST API fallback"
+fi
 
-curl -s -X POST -u "admin:admin123" -b "$JENKINS_COOKIE" \
-  -H "${CRUMB_HEADER}: ${CRUMB}" \
-  "$JENKINS_URL/scriptText" \
-  --data-urlencode "script=
-def plugins = '${PLUGIN_LIST}'.split(' ').toList()
-def pm = Jenkins.instance.pluginManager
-def uc = Jenkins.instance.updateCenter
-uc.updateAllSites()
-Thread.sleep(5000)
-def futures = pm.install(plugins.collect { uc.getPlugin(it) }.findAll { it != null }, true)
-futures.each { try { it.get() } catch(e) { println \"WARN: \${e.message}\" } }
-println 'All plugins queued for install'
-" > /dev/null 2>&1
-
-echo "[✓] Plugins download initiated"
-
-# ── 6. Restart Jenkins to load plugins ──
-echo "[6/7] Restarting Jenkins to activate plugins..."
+# ── 7. Restart Jenkins to load plugins ──
+echo "[7/8] Restarting Jenkins to activate plugins..."
 systemctl restart jenkins
 
-echo "[*] Waiting for Jenkins to restart with plugins..."
 sleep 10
 for i in $(seq 1 90); do
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$JENKINS_URL" 2>/dev/null || echo "000")
@@ -166,22 +175,22 @@ done
 echo "[✓] Jenkins ready with plugins (HTTP $STATUS)"
 sleep 15
 
-# Re-acquire crumb after restart
+# ── 8. Create pipeline job + trigger build ──
+echo "[8/8] Creating Pipeline job & triggering build..."
+
+# git safe.directory for Jenkins
+su - jenkins -c "git config --global --add safe.directory /opt/terrafusion" 2>/dev/null || true
+su - jenkins -c "git config --global --add safe.directory '*'" 2>/dev/null || true
+echo "[✓] safe.directory configured"
+
+# Get fresh crumb
 JENKINS_COOKIE=$(mktemp)
 CRUMB_JSON=$(curl -s -u "admin:admin123" -c "$JENKINS_COOKIE" "$JENKINS_URL/crumbIssuer/api/json")
 CRUMB=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumb'])" 2>/dev/null || echo "")
 CRUMB_HEADER=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumbRequestField'])" 2>/dev/null || echo "Jenkins-Crumb")
 
-# ── 7. Create Pipeline job + trigger build (plugins now loaded) ──
-echo "[7/7] Creating Pipeline job & triggering build..."
-
-# git safe.directory for Jenkins
-su - jenkins -c "git config --global --add safe.directory /opt/terrafusion" 2>/dev/null || true
-su - jenkins -c "git config --global --add safe.directory '*' 2>/dev/null" || true
-echo "[✓] safe.directory configured"
-
 echo "[*] Creating Pipeline job via Script Console..."
-curl -s -X POST -u "admin:admin123" -b "$JENKINS_COOKIE" \
+RESULT=$(curl -s -X POST -u "admin:admin123" -b "$JENKINS_COOKIE" \
   -H "${CRUMB_HEADER}: ${CRUMB}" \
   "$JENKINS_URL/scriptText" \
   --data-urlencode 'script=import jenkins.model.Jenkins
@@ -203,19 +212,23 @@ def scm = new GitSCM([rc], [bs], false, [], null, null, null)
 job.setDefinition(new CpsScmFlowDefinition(scm, "Jenkinsfile"))
 job.save()
 j.save()
-println("Pipeline job created: " + name)' > /dev/null 2>&1 && \
-echo "[✓] Pipeline job created" || echo "[WARN] Pipeline creation failed — may need manual setup"
+println("Pipeline job created: " + name)' 2>&1)
+
+if echo "$RESULT" | grep -q "Pipeline job created"; then
+  echo "[✓] Pipeline job created"
+else
+  echo "[WARN] Pipeline creation result: $RESULT"
+  echo "[WARN] Pipeline may need manual setup — plugins might still be loading"
+fi
 
 if grep -q '__REPLACE_ME__' /opt/terrafusion/backend/.env 2>/dev/null; then
   echo "[!] .env still has placeholder RDS host — skipping auto-build."
-  echo "[!] After SSH, fix RDS host, then trigger build:"
-  echo "    curl -X POST 'http://$PUBLIC_IP:8080/job/terrafusion-pipeline/build' -u admin:admin123"
 else
   echo "[*] Triggering build..."
   curl -s -o /dev/null -X POST \
     -u "admin:admin123" -b "$JENKINS_COOKIE" \
     -H "${CRUMB_HEADER}: ${CRUMB}" \
-    "$JENKINS_URL/job/terrafusion-pipeline/build"
+    "$JENKINS_URL/job/terrafusion-pipeline/build" 2>/dev/null || true
   echo "  Build triggered!"
 fi
 

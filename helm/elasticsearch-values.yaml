@@ -7,13 +7,16 @@ minimumMasterNodes: 1
 
 imageTag: "8.5.1"
 
+# HTTP protocol since security is disabled (fixes readiness/liveness probe scheme)
+protocol: http
+
 resources:
   requests:
     cpu: "100m"
-    memory: "768Mi"
+    memory: "512Mi"
   limits:
     cpu: "500m"
-    memory: "1536Mi"
+    memory: "1Gi"
 
 volumeClaimTemplate:
   accessModes: ["ReadWriteOnce"]
@@ -21,20 +24,19 @@ volumeClaimTemplate:
     requests:
       storage: 5Gi
 
-esJavaOpts: "-Xmx768m -Xms768m"
+esJavaOpts: "-Xmx512m -Xms512m"
 
 networkPolicy:
   enabled: false
 
-# Single-node: disable security for simplicity (no TLS cert nightmares)
+# Don't mount any TLS cert secrets (we disable security)
+secretMounts: []
+
+# Disable security for single-node demo
+# NOTE: Do NOT set discovery.type: single-node here — it conflicts with
+# the chart's auto-generated cluster.initial_master_nodes setting
 esConfig:
   elasticsearch.yml: |
     xpack.security.enabled: false
     xpack.security.transport.ssl.enabled: false
     xpack.security.http.ssl.enabled: false
-    discovery.type: single-node
-
-# Don't auto-generate self-signed TLS certs
-secret:
-  enabled: false
-  password: "admin123"

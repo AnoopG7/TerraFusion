@@ -19,6 +19,11 @@ echo "────────────────────────�
 echo "  [1/7] System Update"
 echo "────────────────────────────────────────────"
 apt update -y && apt upgrade -y
+
+# Elasticsearch requires vm.max_map_count >= 262144 (default is 65530)
+sysctl -w vm.max_map_count=262144
+echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+
 echo "[✓] System updated."
 echo ""
 
@@ -190,8 +195,14 @@ helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
   -n monitoring --create-namespace -f helm/prometheus-values.yaml --wait --timeout 5m 2>/dev/null || \
   echo "  [WARN] Prometheus/Grafana install timed out — run manually later"
 
-# Pre-create logging namespace (ES security disabled, no credentials needed)
+# Pre-create logging namespace and ES credentials secret
+# (Kibana hook jobs reference this secret even when ES security is disabled)
 kubectl create namespace logging 2>/dev/null || true
+kubectl create secret generic elasticsearch-master-credentials \
+  -n logging \
+  --from-literal=username=elastic \
+  --from-literal=password=admin123 \
+  2>/dev/null || true
 
 # ES needs longer than 5m on single-node EC2 — install without --wait, then poll
 helm upgrade --install elasticsearch elastic/elasticsearch \
@@ -224,9 +235,11 @@ kubectl delete configmap -n logging kibana-kibana-helm-scripts --ignore-not-foun
 kubectl delete secret -n logging kibana-kibana-es-token --ignore-not-found 2>/dev/null || true
 
 if [ "${SKIP_ELK:-false}" != "true" ]; then
+  # Use --no-hooks to skip the pre-install Job that tries to create
+  # ES service account tokens (fails when xpack.security is disabled)
   helm upgrade --install kibana elastic/kibana \
     -n logging -f helm/kibana-values.yaml \
-    --version 8.5.1 --wait --timeout 8m 2>/dev/null && \
+    --version 8.5.1 --no-hooks --wait --timeout 8m 2>/dev/null && \
     echo "  [✓] Kibana installed" || \
     echo "  [WARN] Kibana install timed out — run manually later"
 
@@ -284,7 +297,7 @@ echo ""
 echo "--- API Health ---"
 BACKEND_POD=$(kubectl get pod -n terrafusion -l app=backend -o name 2>/dev/null | head -1)
 if [ -n "$BACKEND_POD" ]; then
-  kubectl exec -n terrafusion "$BACKEND_POD" -- curl -s --max-time 5 http://localhost:3001/api/health || echo "Health check pending"
+  kubectl exec -n terrafusion "$BACKEND_POD" -- wget -q -O - --timeout=5 http://localhost:3001/api/health 2>/dev/null || echo "Health check pending"
 else
   echo "Backend pod not ready yet"
 fi
