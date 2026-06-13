@@ -10,10 +10,10 @@ imageTag: "8.5.1"
 resources:
   requests:
     cpu: "100m"
-    memory: "512Mi"
+    memory: "768Mi"
   limits:
-    cpu: "300m"
-    memory: "1Gi"
+    cpu: "500m"
+    memory: "1536Mi"
 
 volumeClaimTemplate:
   accessModes: ["ReadWriteOnce"]
@@ -21,7 +21,20 @@ volumeClaimTemplate:
     requests:
       storage: 5Gi
 
-esJavaOpts: "-Xmx512m -Xms512m"
+esJavaOpts: "-Xmx768m -Xms768m"
 
 networkPolicy:
   enabled: false
+
+# Single-node: disable security for simplicity (no TLS cert nightmares)
+esConfig:
+  elasticsearch.yml: |
+    xpack.security.enabled: false
+    xpack.security.transport.ssl.enabled: false
+    xpack.security.http.ssl.enabled: false
+    discovery.type: single-node
+
+# Don't auto-generate self-signed TLS certs
+secret:
+  enabled: false
+  password: "admin123"

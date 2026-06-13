@@ -110,6 +110,25 @@ echo "[✓] Repository cloned at $DEPLOY_DIR"
 echo ""
 
 echo "────────────────────────────────────────────"
+echo "  [5.5] Building Docker Images"
+echo "────────────────────────────────────────────"
+cd "$DEPLOY_DIR"
+
+echo "[*] Building backend Docker image..."
+docker build -t terrafusion-backend:latest ./backend
+echo "[✓] Backend image built"
+
+echo "[*] Building frontend Docker image..."
+docker build -t terrafusion-frontend:latest ./frontend
+echo "[✓] Frontend image built"
+
+echo "[*] Importing images into k3s containerd..."
+docker save terrafusion-backend:latest | sudo k3s ctr images import -
+docker save terrafusion-frontend:latest | sudo k3s ctr images import -
+echo "[✓] Docker images imported into k3s"
+echo ""
+
+echo "────────────────────────────────────────────"
 echo "  [6/7] Configuring & Starting Application"
 echo "────────────────────────────────────────────"
 cd "$DEPLOY_DIR"
@@ -133,8 +152,19 @@ chmod 600 backend/.env
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 kubectl create namespace terrafusion 2>/dev/null || true
 
-# Create k8s Secret with real values from .env (not placeholders)
+# Create k8s Secret and ConfigMap with real values from .env (not placeholders)
 source backend/.env
+
+# ConfigMap with real RDS values (overrides static k8s/configmap.yaml placeholder)
+kubectl create configmap backend-config -n terrafusion \
+  --from-literal=DB_HOST="${DB_HOST}" \
+  --from-literal=DB_PORT="${DB_PORT:-3306}" \
+  --from-literal=DB_NAME="${DB_NAME:-terrafusion}" \
+  --from-literal=DB_USER="${DB_USER:-terrafusion_admin}" \
+  --from-literal=DB_TYPE="${DB_TYPE:-mysql}" \
+  --from-literal=NODE_ENV="production" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
 kubectl create secret generic backend-secret -n terrafusion \
   --from-literal=DB_PASSWORD="${DB_PASSWORD}" \
   --from-literal=JWT_SECRET="${JWT_SECRET}" \
@@ -160,16 +190,13 @@ helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
   -n monitoring --create-namespace -f helm/prometheus-values.yaml --wait --timeout 5m 2>/dev/null || \
   echo "  [WARN] Prometheus/Grafana install timed out — run manually later"
 
-# Pre-create ES credentials with known password (Helm auto-generates if secret doesn't exist)
+# Pre-create logging namespace (ES security disabled, no credentials needed)
 kubectl create namespace logging 2>/dev/null || true
-kubectl create secret generic elasticsearch-master-credentials \
-  -n logging --from-literal=password=admin123 2>/dev/null || true
-echo "  [✓] ES password set to: admin123"
 
 # ES needs longer than 5m on single-node EC2 — install without --wait, then poll
 helm upgrade --install elasticsearch elastic/elasticsearch \
   -n logging --create-namespace -f helm/elasticsearch-values.yaml \
-  --version 8.5.1 2>/dev/null && \
+  --version 8.5.1 --timeout 10m 2>/dev/null && \
   echo "  [✓] Elasticsearch chart submitted" || \
   echo "  [WARN] Elasticsearch install failed — run manually later"
 
@@ -197,18 +224,9 @@ kubectl delete configmap -n logging kibana-kibana-helm-scripts --ignore-not-foun
 kubectl delete secret -n logging kibana-kibana-es-token --ignore-not-found 2>/dev/null || true
 
 if [ "${SKIP_ELK:-false}" != "true" ]; then
-  # Clean up old Kibana service account token from ES (prevents pre-install hook conflicts)
-  ES_PASS=$(kubectl get secret -n logging elasticsearch-master-credentials -ojsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
-  if [ -n "$ES_PASS" ]; then
-    kubectl exec -n logging elasticsearch-master-0 -- bash -c \
-      "curl -sk -u elastic:${ES_PASS} -X DELETE 'https://localhost:9200/_security/service/elastic/kibana/credential/token/kibana-kibana'" \
-      2>/dev/null || true
-    echo "  [✓] Old Kibana ES token cleaned"
-  fi
-
-  helm install kibana elastic/kibana \
+  helm upgrade --install kibana elastic/kibana \
     -n logging -f helm/kibana-values.yaml \
-    --version 8.5.1 --wait --timeout 5m 2>/dev/null && \
+    --version 8.5.1 --wait --timeout 8m 2>/dev/null && \
     echo "  [✓] Kibana installed" || \
     echo "  [WARN] Kibana install timed out — run manually later"
 
@@ -232,11 +250,17 @@ for i in $(seq 1 30); do
   sleep 5
 done
 if [ -n "$VAULT_POD" ]; then
-  kubectl exec -n vault "$VAULT_POD" -- vault kv put secret/terrafusion/backend \
-    DB_PASSWORD="${DB_PASSWORD}" \
-    JWT_SECRET="${JWT_SECRET}" \
-    DB_HOST="${DB_HOST:-__REPLACE_ME__}" \
-    DB_NAME="${RDS_DB_NAME:-terrafusion}" 2>/dev/null && \
+  # Wait for Vault pod to be fully ready
+  kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=vault -n vault --timeout=120s 2>/dev/null || true
+  sleep 5
+  kubectl exec -n vault "$VAULT_POD" -- sh -c "
+    export VAULT_ADDR=http://127.0.0.1:8200
+    vault kv put secret/terrafusion/backend \
+      DB_PASSWORD='${DB_PASSWORD}' \
+      JWT_SECRET='${JWT_SECRET}' \
+      DB_HOST='${DB_HOST}' \
+      DB_NAME='${RDS_DB_NAME:-terrafusion}'
+  " 2>/dev/null && \
     echo "  [✓] Backend secrets stored in Vault" || \
     echo "  [WARN] Vault secret store failed — may need manual setup"
 else
@@ -274,7 +298,7 @@ echo ""
 echo "  Jenkins:  http://$(curl -s http://checkip.amazonaws.com):8080 (admin / admin123)"
 echo "  Frontend: http://$(curl -s http://checkip.amazonaws.com):30080"
 echo "  Grafana:  http://$(curl -s http://checkip.amazonaws.com):30300 (admin:admin)"
-echo "  Kibana:   http://$(curl -s http://checkip.amazonaws.com):30560 (elastic / admin123)"
+echo "  Kibana:   http://$(curl -s http://checkip.amazonaws.com):30560 (no auth)"
 echo "  Vault:    http://$(curl -s http://checkip.amazonaws.com):30820 (token: root)"
 echo "  Vault secret: vault kv get secret/terrafusion/backend"
 echo "  k3s:      kubectl get nodes"

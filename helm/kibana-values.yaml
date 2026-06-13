@@ -15,20 +15,16 @@ service:
   type: NodePort
   nodePort: 30560
 
-elasticsearchHosts: "https://elasticsearch-master.logging.svc:9200"
-
-elasticsearchCertificateSecret: elasticsearch-master-certs
+# ES security is disabled — use HTTP, not HTTPS
+elasticsearchHosts: "http://elasticsearch-master.logging.svc:9200"
 
 extraEnvs:
   - name: NODE_OPTIONS
     value: "--max-old-space-size=1800"
-  - name: NODE_TLS_REJECT_UNAUTHORIZED
-    value: "0"
 
 kibanaConfig:
   kibana.yml: |
-    elasticsearch.hosts: ["https://elasticsearch-master.logging.svc:9200"]
+    elasticsearch.hosts: ["http://elasticsearch-master.logging.svc:9200"]
     server.host: "0.0.0.0"
     server.shutdownTimeout: "5s"
     monitoring.ui.container.elasticsearch.enabled: true
-    elasticsearch.ssl.certificateAuthorities: /usr/share/kibana/config/certs/ca.crt

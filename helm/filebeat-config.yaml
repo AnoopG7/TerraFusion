@@ -1,7 +1,7 @@
 # Filebeat — DaemonSet Helm values
 # Install: helm upgrade --install filebeat elastic/filebeat -n logging -f filebeat-config.yaml
 
-imageTag: "8.11.0"
+imageTag: "8.5.1"
 
 daemonSet:
   enabled: true
@@ -37,21 +37,6 @@ filebeatConfig:
           fields: ["host"]
 
     output.elasticsearch:
-      hosts: ["elasticsearch-master.logging.svc:9200"]
-      username: ${ELASTICSEARCH_USERNAME}
-      password: ${ELASTICSEARCH_PASSWORD}
-      protocol: https
-      ssl.certificate_authorities:
-        - /usr/share/filebeat/certs/ca.crt
+      hosts: ["http://elasticsearch-master.logging.svc:9200"]
 
-extraEnvs:
-  - name: ELASTICSEARCH_USERNAME
-    valueFrom:
-      secretKeyRef:
-        name: elasticsearch-master-credentials
-        key: username
-  - name: ELASTICSEARCH_PASSWORD
-    valueFrom:
-      secretKeyRef:
-        name: elasticsearch-master-credentials
-        key: password
+extraEnvs: []
