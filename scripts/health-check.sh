@@ -65,27 +65,6 @@ fi
 echo "  5. INFRASTRUCTURE SERVICES"
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 if command -v kubectl &>/dev/null; then
-  ES_PODS=$(kubectl get pods -n logging -l app=elasticsearch-master --field-selector=status.phase=Running 2>/dev/null | grep -c "elasticsearch-master" || true)
-  if [[ "$ES_PODS" -gt 0 ]]; then
-    echo "   [✓] Elasticsearch running"
-  else
-    echo "   [✗] Elasticsearch NOT running"
-    FAILED=$((FAILED + 1))
-  fi
-  KIBANA_PODS=$(kubectl get pods -n logging -l app=kibana --field-selector=status.phase=Running 2>/dev/null | grep -c "kibana" || true)
-  if [[ "$KIBANA_PODS" -gt 0 ]]; then
-    echo "   [✓] Kibana running"
-  else
-    echo "   [✗] Kibana NOT running"
-    FAILED=$((FAILED + 1))
-  fi
-  KIBANA_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:30560/ 2>/dev/null || echo "000")
-  if [[ "$KIBANA_CODE" == "302" ]]; then
-    echo "   [✓] Kibana accessible (HTTP $KIBANA_CODE)"
-  else
-    echo "   [✗] Kibana unreachable (HTTP $KIBANA_CODE)"
-    FAILED=$((FAILED + 1))
-  fi
   GRAFANA_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:30300/ 2>/dev/null || echo "000")
   if [[ "$GRAFANA_CODE" == "200" ]] || [[ "$GRAFANA_CODE" == "302" ]]; then
     echo "   [✓] Grafana accessible (HTTP $GRAFANA_CODE)"

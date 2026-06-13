@@ -78,11 +78,6 @@ output "grafana_url" {
   value       = "http://${aws_instance.main.public_ip}:30300"
 }
 
-output "elasticsearch_url" {
-  description = "Elasticsearch URL (HTTP, no auth)"
-  value       = "http://${aws_instance.main.public_ip}:30920"
-}
-
 output "vault_url" {
   description = "Vault UI URL"
   value       = "http://${aws_instance.main.public_ip}:30820"
