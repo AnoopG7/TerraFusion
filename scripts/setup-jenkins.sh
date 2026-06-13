@@ -138,7 +138,7 @@ echo "[✓] Jenkins ready with all plugins (HTTP $STATUS)"
 # ── 7. Create pipeline job via direct XML config + trigger build ──
 echo "[7/7] Creating Pipeline job & triggering build..."
 
-su - jenkins -c "git config --global --add safe.directory '*'"
+sudo -u jenkins git config --global --add safe.directory '*' 2>/dev/null || true
 
 cat > /tmp/terrafusion-pipeline-config.xml << 'JOBXML'
 <?xml version="1.1" encoding="UTF-8"?>
@@ -245,14 +245,10 @@ CRUMB_JSON=$(curl -s -u "admin:admin123" -c "$COOKIE_FILE" "$JENKINS_URL/crumbIs
 CRUMB=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumb'])" 2>/dev/null || echo "")
 CRUMB_HEADER=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumbRequestField'])" 2>/dev/null || echo "Jenkins-Crumb")
 
-if grep -q '__REPLACE_ME__' /opt/terrafusion/backend/.env 2>/dev/null; then
-  echo "[!] .env still has placeholder RDS host — skipping auto-build"
-else
-  echo "[*] Triggering build..."
-  curl -s -X POST -u "admin:admin123" -b "$COOKIE_FILE" \
-    -H "${CRUMB_HEADER}: ${CRUMB}" \
-    "$JENKINS_URL/job/terrafusion-pipeline/buildWithParameters?BRANCH=main" -o /dev/null -w "  HTTP %{http_code}\n"
-fi
+echo "[*] Triggering initial build..."
+curl -s -X POST -u "admin:admin123" -b "$COOKIE_FILE" \
+  -H "${CRUMB_HEADER}: ${CRUMB}" \
+  "$JENKINS_URL/job/terrafusion-pipeline/buildWithParameters?BRANCH=main" -o /dev/null || echo "  [WARN] Build trigger failed — trigger manually"
 rm -f "$COOKIE_FILE"
 
 echo ""

@@ -20,9 +20,7 @@ echo "  [1/7] System Update"
 echo "────────────────────────────────────────────"
 apt update -y && apt upgrade -y
 
-# Elasticsearch requires vm.max_map_count >= 262144 (default is 65530)
-sysctl -w vm.max_map_count=262144
-echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+
 
 echo "[✓] System updated."
 echo ""
@@ -77,9 +75,6 @@ if grep -q "server: https://127.0.0.1" /etc/rancher/k3s/k3s.yaml; then
 fi
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 chmod 644 /etc/rancher/k3s/k3s.yaml
-mkdir -p /var/lib/jenkins/.kube
-cp /etc/rancher/k3s/k3s.yaml /var/lib/jenkins/.kube/config
-chown -R jenkins:jenkins /var/lib/jenkins/.kube || true
 echo "k3s $(k3s --version | head -1)"
 
 if ! command -v helm &>/dev/null; then
@@ -254,7 +249,6 @@ echo ""
 echo "  Jenkins:  http://$(curl -s http://checkip.amazonaws.com):8080 (admin / admin123)"
 echo "  Frontend: http://$(curl -s http://checkip.amazonaws.com):30080"
 echo "  Grafana:  http://$(curl -s http://checkip.amazonaws.com):30300 (admin:admin)"
-echo   "  Elasticsearch: http://$(curl -s http://checkip.amazonaws.com):30920"
 echo "  Vault:    http://$(curl -s http://checkip.amazonaws.com):30820 (token: root)"
 echo "  Vault secret: vault kv get secret/terrafusion/backend"
 echo "  k3s:      kubectl get nodes"
