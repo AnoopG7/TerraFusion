@@ -86,13 +86,9 @@ resource "aws_instance" "main" {
   vpc_security_group_ids = [aws_security_group.ec2.id]
   key_name               = var.key_pair_name
 
-  user_data = replace(
-    replace(
-      file("${path.module}/../scripts/server-init.sh"),
-      "__REPLACE_ME__",    aws_db_instance.mysql.address
-    ),
-    "__RDS_PASSWORD__",    aws_db_instance.mysql.password
-  )
+  # EC2 and RDS created in parallel (~9 min saved). server-init.sh uses
+  # ${RDS_HOST:-__REPLACE_ME__} / ${RDS_PASSWORD:-__RDS_PASSWORD__} fallbacks.
+  user_data = file("${path.module}/../scripts/server-init.sh")
 
   root_block_device {
     volume_size = 20
