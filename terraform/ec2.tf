@@ -119,11 +119,11 @@ resource "null_resource" "rds_config" {
   provisioner "local-exec" {
     command = <<-EOCMD
       for i in $(seq 1 30); do
-        ssh -o StrictHostKeyChecking=no -i ~/.ssh/${var.key_pair_name}.pem ubuntu@${aws_eip.main.public_ip} \
+        ssh -o StrictHostKeyChecking=no -i ~/${var.key_pair_name}.pem ubuntu@${aws_eip.main.public_ip} \
           'kubectl get node >/dev/null 2>&1' 2>/dev/null && break
         sleep 10
       done
-      ssh -o StrictHostKeyChecking=no -i ~/.ssh/${var.key_pair_name}.pem ubuntu@${aws_eip.main.public_ip} \
+      ssh -o StrictHostKeyChecking=no -i ~/${var.key_pair_name}.pem ubuntu@${aws_eip.main.public_ip} \
         'kubectl create configmap backend-config -n terrafusion \
           --from-literal=DB_HOST=${aws_db_instance.mysql.address} \
           --from-literal=DB_PORT=${aws_db_instance.mysql.port} \
