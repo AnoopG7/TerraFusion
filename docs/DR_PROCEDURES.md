@@ -16,7 +16,7 @@ kubectl get pods -n terrafusion -w
 # In another terminal:
 kubectl delete pod -n terrafusion -l app=backend
 # Watch pod terminate and new one spawn
-curl http://localhost:30080/api/health  # Should still return 200
+curl http://<EC2_IP>/api/health   # Should still return 200
 ```
 
 **RTO:** <10 seconds | **RPO:** 0 (stateless)
@@ -35,11 +35,11 @@ curl http://localhost:30080/api/health  # Should still return 200
 **How to demo:**
 ```bash
 sudo systemctl stop k3s
-curl http://localhost:30080/api/health  # Fails
+curl http://<EC2_IP>/api/health   # Fails
 sudo systemctl start k3s
 sleep 30
-kubectl get pods -n terrafusion  # Should all be Running
-curl http://localhost:30080/api/health  # Should return 200
+kubectl get pods -n terrafusion   # Should all be Running
+curl http://<EC2_IP>/api/health   # Should return 200
 ```
 
 **RTO:** ~30-60 seconds | **RPO:** 0 (etcd state preserved)
@@ -60,7 +60,7 @@ curl http://localhost:30080/api/health  # Should return 200
 aws rds reboot-db-instance --db-instance-identifier terrafusion-mysql
 kubectl logs -n terrafusion -l app=backend --tail=20 -f
 # You'll see: "Can't connect to MySQL server" → reconnects
-curl http://localhost:30080/api/sensors  # Should recover within 60s
+curl http://<EC2_IP>/api/sensors   # Should recover within 60s
 ```
 
 **RTO:** ~60 seconds | **RPO:** Negligible (in-flight transactions lost)
@@ -72,7 +72,7 @@ curl http://localhost:30080/api/sensors  # Should recover within 60s
 **Trigger:** Deploy code that breaks the health check
 
 **Expected behavior:**
-1. Jenkins pipeline: Build → Push to ECR → Deploy to k3s → Smoke test
+1. Jenkins pipeline: Build → Import to k3s → Deploy → Smoke test
 2. Smoke test fails (curl returns non-200)
 3. Jenkins catches failure → `kubectl rollout undo`
 4. Previous version is restored
@@ -81,7 +81,7 @@ curl http://localhost:30080/api/sensors  # Should recover within 60s
 ```bash
 # Trigger Jenkins pipeline with bad code
 # Jenkins will:
-#   1. Build and push broken image
+#   1. Build and import broken image
 #   2. Deploy to k3s
 #   3. Smoke test fails
 #   4. Auto-rollback to last good version
@@ -95,8 +95,8 @@ kubectl rollout status deployment/backend -n terrafusion
 kubectl rollout undo deployment/backend -n terrafusion
 
 # Verify recovery
-kubectl get pods -n terrafusion  # Should be Running
-curl http://localhost:30080/api/health  # Should be 200
+kubectl get pods -n terrafusion       # Should be Running
+curl http://<EC2_IP>/api/health       # Should be 200
 ```
 
 **RTO:** ~2-3 minutes | **RPO:** 0
@@ -133,22 +133,17 @@ kubectl run -it --rm load-gen --image=busybox -- sh -c "
 
 ## Scenario 6: Log Flood / Disk Full
 
-**Trigger:** Generate excessive logs
+**Trigger:** Excessive container logs
 
 **Expected behavior:**
-1. Filebeat DaemonSet ships logs → Elasticsearch
-2. Log rotate cron job compresses old logs (weekly)
-3. Docker log truncation frees disk space
+1. Cron job rotates logs weekly (`rotate-logs.sh`)
+2. Docker system prune removes unused images/containers
+3. Prometheus alerts on disk usage >80%
 
 **How to demo:**
 ```bash
-# Check current disk
 df -h /
-
-# Show log rotation
 sudo /opt/terrafusion/scripts/rotate-logs.sh
-
-# Verify recovery
 df -h /
 ```
 
@@ -160,7 +155,7 @@ df -h /
 
 | Scenario | Detection | Recovery | Time |
 |---|---|---|---|
-| Pod crash | Liveness probe fails | K8s Recreate pod | <10s |
+| Pod crash | Liveness probe fails | K8s recreate pod | <10s |
 | Node failure | Systemd watch | k3s restart | <60s |
 | RDS reboot | Connection timeout | RDS restart | <60s |
 | Failed deploy | Smoke test fails | Jenkins rollback | <3min |
